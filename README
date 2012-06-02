@@ -1,0 +1,32 @@
+WebSocketServer
+Written for Python 2.7
+
+Kevin Cuzner
+
+This is a server meant to run dedicated on a specific port on the host machine.
+It provides a method to host multiple WebSocket-based services sorted by
+directory and provide a (relatively) easy interface for writing additional
+services.
+
+Example of operation:
+ - WebSocketServer running on port 12345 of the host machine
+ - User requests ws://localhost:12345/foo/bar/
+ 	- WebSocketServer processes the directory and begins looking in its
+ 	  service tree for a process named foo->bar->ws_service.py. If the service
+ 	  isn't found, it looks in the physical directory and attempts to include
+ 	  the ws_service.py file in that directory. If it cannot, a 404 is issued.
+ 	  Additionally, if file doesn't contain a class Service, a 500 is issued. If
+ 	  the service is found and started, the WebSocketServer performs a handshake
+ 	  and passes the incoming socket off to the Service class
+ - User requests ws://localhost:12345/foo/bar
+ 	- Same as above except the server will look for foo->bar.py to find the
+ 	  Service class 
+
+A service must implement the WebSockets.Service class which is in the form of a
+multiprocessing.Process. The class must be named Service. The main method for
+the service should reside in the run() method. Client sockets are sent using the
+WebSockets.Service.clientConnQueue which is a multiprocessing.Queue. Services
+themselves are free to use threading instead of multiprocessing if they would
+like. Services should also terminate once they no longer have any client sockets
+attached to them to save memory. Services should be built in such a way that if
+they have to be stopped and resumed later they can do so without any problems.
