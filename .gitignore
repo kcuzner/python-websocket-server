@@ -1,2 +1,5 @@
 #Compiled files
 *.pyc
+
+#logging
+*.log

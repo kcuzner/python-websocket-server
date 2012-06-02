@@ -9,6 +9,7 @@ import ConfigParser
 import imp
 import threading
 import WebSockets
+import logging
 
 HTTP_METHOD = "GET"
 HTTP_VERSION = "HTTP/1.1"
@@ -27,6 +28,7 @@ class WebSocketServer:
         self.directory = Processes.ProcessDirectory()
         self.config = None
         self.shutdownEvent = threading.Event()
+        #logging.basicConfig(filename="server.log", level=logging.DEBUG)
         
     def runServer(self):
         print "Loading configuration file..."

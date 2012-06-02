@@ -4,7 +4,6 @@ import Services
 import Queue
 import time
 import threading
-import select
 import json
 
 class Chatter(threading.Thread):
@@ -141,8 +140,4 @@ class Service(Services.Service):
         except KeyboardInterrupt:
             pass
         print "Chatroom Service shutting down"
-    
-    def forgetClient(self, client):
-        """Called to remove a client from the chatroom subscribers list"""
-        pass
         

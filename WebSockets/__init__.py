@@ -7,6 +7,7 @@ import Queue
 import time
 import collections
 import sys
+import logging
 
 BUFFER_SIZE = 4096
 WEBSOCKET_VERSION = "13"
@@ -53,7 +54,6 @@ class WebSocketClient:
             byteQueue = collections.deque(receivedBytes)
             while len(byteQueue) > 0 and self.state != WebSocketClient.WebSocketRecvState.STATE_DONE:
                 b = byteQueue.popleft() #pop from the beginning like a queue
-                print self.state
                 if self.state == WebSocketClient.WebSocketRecvState.STATE_TYPE:
                     #process this byte as the initial type declarer
                     if b != 0x81:
@@ -173,6 +173,7 @@ class WebSocketClient:
         
         def _sendToSocket(self, data, sock):
             """Sends some bytes to a socket and returns the remaining bytes or none if it was all sent"""
+            print "sending", data, "to", sock
             nSent = sock.send(data)
             if nSent == len(data):
                 return None
@@ -188,6 +189,7 @@ class WebSocketClient:
                     for s in self.sockets:
                         if s.open == False:
                             #remove this socket from our list
+                            print "Notice: Socket", s, "removed."
                             self.sockets.remove(s)
                         #sadly, we need to call select on every socket individually so that we can keep track of the WebSocketClient class
                         sList = [ s.connection ]
@@ -195,7 +197,11 @@ class WebSocketClient:
                             r, w, x = select.select(sList, sList, sList, 0)
                         except socket.error:
                             #it failed. remove this client
+                            print "Notice: Socket", s, "failed."
                             s.open = False #this is no longer open, but we can't call close since it would break it some more
+                        if x:
+                            print "Notice: Socket", s, "has an exceptional condition"
+                            s.open = False
                         if r:
                             #the socket is ready to be read
                             try:
@@ -208,21 +214,32 @@ class WebSocketClient:
                                         try:
                                             s.recvQueue.put_nowait(s._readProgress.unmaskedPayloadBytes.decode(sys.getdefaultencoding()))
                                         except Queue.Full:
-                                            print "Notice: Receive queue full on WebSocketClient", s, "... did you forget to empty the queue or call task_done?"
+                                            logging.warning("Notice: Receive queue full on WebSocketClient" + str(s) + "... did you forget to empty the queue or call task_done?")
                                             pass #oh well...I guess their data gets to be lost since they didn't bother to empty their queue
                                         s._readProgress = WebSocketClient.WebSocketRecvState() #reset the progress
                             except socket.error:
                                 pass #don't worry about it
                         if w:
                             #the socket is ready to be written
+                            #for writing, the exception catcher has to be inside rather than outside
+                            #everything like the received catcher was since we need to make sure to
+                            #inform the sendqueue that we are done with the passed task
                             if s._writeProgress != None:
                                 #we still have something to write
-                                s._writeProgress = self._sendToSocket(s._writeProgress, s.connection)
+                                try:
+                                    s._writeProgress = self._sendToSocket(s._writeProgress, s.connection)
+                                except socket.error:
+                                    #probably a broken pipe. don't worry about it...it will be caught on the next loop around
+                                    pass
                             elif not s.sendQueue.empty():
                                 #there is something new to start sending
                                 try:
                                     toWrite = self._stringToFrame(s.sendQueue.get_nowait())
-                                    self._sendToSocket(toWrite, s.connection)
+                                    try:
+                                        self._sendToSocket(toWrite, s.connection)
+                                    except socket.error:
+                                        #probably a broken pipe. don't worry about it...it will be caught on the next loop around
+                                        pass
                                     s.sendQueue.task_done()
                                 except Queue.Empty:
                                     pass #don't worry about it...we just couldn't get anything
@@ -230,7 +247,7 @@ class WebSocketClient:
                         if s.recvQueue.empty() != True and s.handle_recv != None:
                             s.handle_recv()
                     l = len(self.sockets)
-                time.sleep(0.025) #wait 25ms for anything else to happen on the socket
+                time.sleep(0.025) #wait 25ms for anything else to happen on the socket so we don't use 100% cpu on this one thread
     
     _sendRecvThread = WebSocketSendRecvThread( [] )
     _sendRecvThread.start() #it will immediately stop...this is for initial state
@@ -246,6 +263,7 @@ class WebSocketClient:
             #add to the existing one
             with WebSocketClient._sendRecvThread.socketListLock:
                 WebSocketClient._sendRecvThread.sockets.append(s)
+        logging.debug("Socket" + str(s) + "added to _sendRecvThread for management")
     
     def __init__(self, conn, addr):
         """Initializes the web socket
