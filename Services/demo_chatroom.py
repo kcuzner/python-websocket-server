@@ -8,12 +8,14 @@ import json
 
 class Chatter(threading.Thread):
     STATE_INITIALIZE = 0
-    STATE_CHATTING = 1
-    def __init__(self, client, chatroom, shutdownFlag):
+    STATE_SELECTING = 1
+    STATE_CHATTING = 2
+    def __init__(self, client, chatrooms, shutdownFlag):
         threading.Thread.__init__(self)
         self.clientLock = threading.Lock()
         self.client = client
-        self.chatroom = chatroom
+        self.chatrooms = chatrooms
+        self.chatroom = None
         self.shutdownFlag = shutdownFlag
         self.state = Chatter.STATE_INITIALIZE
         self.client.handle_recv = self._handleReception
@@ -25,7 +27,9 @@ class Chatter(threading.Thread):
         while self.shutdownFlag.is_set() == False:
             if self.client.open == False:
                 #we got closed on the client side probably
-                self.chatroom.unsubscribe(self, self.name)
+                self.chatrooms.unsubscribe(self)
+                if self.chatroom != None:
+                    self.chatroom.unsubscribe(self, self.name)
                 break
             time.sleep(0.05) #wait for 50ms
             
@@ -41,13 +45,35 @@ class Chatter(threading.Thread):
                     if data["type"] == "name" and "name" in data:
                         #they are giving us a name
                         self.name = data["name"]
-                        self.state = Chatter.STATE_CHATTING #we are now chatting
+                        self.state = Chatter.STATE_SELECTING #we are now chatting
                         print self.name, " now chatting."
                         self.chatroom.subscribe(self, self.name)
                         return
                 #only ask for a name if they sent us something else
                 with self.clientLock:
                     self.client.send(json.dumps({ 'type' : 'query', 'query' : 'name' }))
+            elif self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
+                #in selection mode or chatting mode
+                if "type" in data:
+                    if data["type"] == "join" and "chatroom" in data:
+                        #subscribe to a chatroom
+                        toJoin = None
+                        ret = { 'type' : 'join', 'chatroom' : data["chatroom"] }
+                        if data["chatroom"] in self.chatrooms.chatrooms:
+                            toJoin = self.chatrooms.chatrooms[data["chatroom"]]
+                        if toJoin == None:
+                            ret = { 'type' : 'notice', 'notice' : 'Chatroom ' + str(data["chatroom"]) + ' not found.' }
+                        elif self.chatroom != None:
+                            #unsubscribe from our previous chatroom
+                            self.chatroom.unsubscribe(self, self.name)
+                        if toJoin != None:
+                            #subscribe to the new chatroom
+                            self.chatroom = toJoin
+                        with self.clientLock:
+                            self.client.send(json.dumps(ret))
+                    if data["type"] == "create" and "chatroom" in data:
+                        #create a new chatroom
+                        self.chatrooms.createChatroom(data["chatroom"]) #if this works, a chatroom event will happen
             elif self.state == Chatter.STATE_CHATTING:
                 if "type" in data:
                     if data["type"] == "message" and "message" in data:
@@ -71,7 +97,36 @@ class Chatter(threading.Thread):
                 with self.clientLock:
                     data = { 'type' : 'event', 'event' : { 'type' : 'logoff', 'name' : event.data } }
                     self.client.send(json.dumps(data))
+            elif event.event == Chatroom.ChatroomEvent.EV_CREATE:
+                with self.clientLock:
+                    data = { 'type' : 'event', 'event' : { 'type' : 'newchatroom', 'name' : event.data } }
+
+class ChatroomCollection:
+    """A list of chatrooms that supports "subscriptions" """
+    def __init__(self):
+        self.chatrooms = {}
+        self.subscribers = []
     
+    def subscribe(self, chatter):
+        """Subscribes a chatter to the events in this chatroom collection (such as adding chatrooms)"""
+        self.subscribers.append(chatter)
+    
+    def unsubscribe(self, chatter):
+        """Unsubscribes a chatter from the events in this chatroom collection"""
+        try:
+            self.subscribers.remove(chatter)
+        except ValueError:
+            pass
+    
+    def createChatroom(self, name):
+        """Creates a chatroom and informs all subscribers it has been created"""
+        if name in self.chatrooms:
+            return False #chatroom already exists
+        self.chatrooms[name] = Chatroom(name)
+        event = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_CREATE, name)
+        for subscriber in self.subscribers:
+            subscriber.onChatroomEvent(event)
+        return True
 
 class Chatroom:
     class ChatroomEvent:
@@ -79,6 +134,7 @@ class Chatroom:
         EV_MESSAGE = 0
         EV_NEWSUBSCRIBER = 1
         EV_UNSUBSCRIBE = 2
+        EV_CREATE = 3
         def __init__(self, event, data):
             """Creates a new chatroom event.
             type: A value matching one of the EV_ variables in this class
@@ -87,9 +143,10 @@ class Chatroom:
             self.event = event
             self.data = data
     
-    def __init__(self):
+    def __init__(self, name):
         self.subscribers = list()
         self.lock = threading.Lock()
+        self.name = name
         
     
     def subscribe(self, obj, name):
@@ -121,7 +178,7 @@ class Chatroom:
 class Service(Services.Service):
     def __init__(self):
         Services.Service.__init__(self)
-        self.chatroom = Chatroom()
+        self.chatrooms = ChatroomCollection()
     
     def run(self):
         """Main thread method"""
@@ -131,8 +188,9 @@ class Service(Services.Service):
                 try:
                     client = self.clientConnQueue.get_nowait()
                     print "Got client from", client.address
-                    chatter = Chatter(client, self.chatroom, self.shutdownFlag)
+                    chatter = Chatter(client, self.chatrooms, self.shutdownFlag)
                     chatter.start()
+                    self.chatrooms.subscribe(chatter)
                     self.clientConnQueue.task_done()
                 except Queue.Empty:
                     pass

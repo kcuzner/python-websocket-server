@@ -89,7 +89,7 @@ class WebSocketServer:
                 if s is None:
                     #attempt to load the service
                     incpath = "" #'.'.join(location)
-                    path = "Services/" + '/'.join(location)
+                    path = self.config.get('server', 'document-root') + '/'.join(location)
                     try:
                         service = imp.load_source(incpath, path)
                         s = service.Service()
