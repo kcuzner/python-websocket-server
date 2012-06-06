@@ -45,14 +45,13 @@ class Chatter(threading.Thread):
                     if data["type"] == "name" and "name" in data:
                         #they are giving us a name
                         self.name = data["name"]
-                        self.state = Chatter.STATE_SELECTING #we are now chatting
+                        self.state = Chatter.STATE_SELECTING #we are now selecting a chatroom
                         print self.name, " now chatting."
-                        self.chatroom.subscribe(self, self.name)
                         return
                 #only ask for a name if they sent us something else
                 with self.clientLock:
                     self.client.send(json.dumps({ 'type' : 'query', 'query' : 'name' }))
-            elif self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
+            if self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
                 #in selection mode or chatting mode
                 if "type" in data:
                     if data["type"] == "join" and "chatroom" in data:
@@ -69,12 +68,14 @@ class Chatter(threading.Thread):
                         if toJoin != None:
                             #subscribe to the new chatroom
                             self.chatroom = toJoin
+                            self.chatroom.subscribe(self, self.name)
+                            self.state = Chatter.STATE_CHATTING
                         with self.clientLock:
                             self.client.send(json.dumps(ret))
                     if data["type"] == "create" and "chatroom" in data:
                         #create a new chatroom
                         self.chatrooms.createChatroom(data["chatroom"]) #if this works, a chatroom event will happen
-            elif self.state == Chatter.STATE_CHATTING:
+            if self.state == Chatter.STATE_CHATTING:
                 if "type" in data:
                     if data["type"] == "message" and "message" in data:
                         #sending a message
@@ -83,8 +84,14 @@ class Chatter(threading.Thread):
 
     def onChatroomEvent(self, event):
         """Called by the chatroom object to tell us something"""
-        if self.state == Chatter.STATE_CHATTING:
-            #we ignore events unless we are chatting
+        if event.event == Chatroom.ChatroomEvent.EV_LISTING:
+            #they are listing all their rooms to us
+            with self.clientLock:
+                data = { 'type' : 'event', 'event' : { 'type' : 'listing', 'chatrooms' : event.data } }
+                self.client.send(json.dumps(data))
+            
+        if self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
+            #we ignore some events unless we are chatting
             if event.event == Chatroom.ChatroomEvent.EV_MESSAGE:
                 with self.clientLock:
                     data = { 'type' : 'event', 'event' : { 'type' : 'message', 'name' : event.data[0], 'message' : event.data[1] } }
@@ -100,6 +107,7 @@ class Chatter(threading.Thread):
             elif event.event == Chatroom.ChatroomEvent.EV_CREATE:
                 with self.clientLock:
                     data = { 'type' : 'event', 'event' : { 'type' : 'newchatroom', 'name' : event.data } }
+                    self.client.send(json.dumps(data))
 
 class ChatroomCollection:
     """A list of chatrooms that supports "subscriptions" """
@@ -110,6 +118,11 @@ class ChatroomCollection:
     def subscribe(self, chatter):
         """Subscribes a chatter to the events in this chatroom collection (such as adding chatrooms)"""
         self.subscribers.append(chatter)
+        #tell the chatter about all my rooms
+        names = []
+        for room in self.chatrooms:
+            names.append(room)
+        chatter.onChatroomEvent(Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_LISTING, names))
     
     def unsubscribe(self, chatter):
         """Unsubscribes a chatter from the events in this chatroom collection"""
@@ -121,6 +134,7 @@ class ChatroomCollection:
     def createChatroom(self, name):
         """Creates a chatroom and informs all subscribers it has been created"""
         if name in self.chatrooms:
+            print "oh noes"
             return False #chatroom already exists
         self.chatrooms[name] = Chatroom(name)
         event = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_CREATE, name)
@@ -135,6 +149,7 @@ class Chatroom:
         EV_NEWSUBSCRIBER = 1
         EV_UNSUBSCRIBE = 2
         EV_CREATE = 3
+        EV_LISTING = 4
         def __init__(self, event, data):
             """Creates a new chatroom event.
             type: A value matching one of the EV_ variables in this class
