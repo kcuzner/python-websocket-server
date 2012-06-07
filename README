@@ -6,7 +6,11 @@ Kevin Cuzner
 This is a server meant to run dedicated on a specific port on the host machine.
 It provides a method to host multiple WebSocket-based services sorted by
 directory and provide a (relatively) easy interface for writing additional
-services.
+services. This server utilizes the threading library instead of the
+multiprocessing library and thus will only ever use one full core on the CPU.
+However, seeing as this is a network application, there shouldn't be huge
+problems unless a service is doing many complicated things that would cause it
+to eat CPU.
 
 Example of operation:
  - WebSocketServer running on port 12345 of the host machine
@@ -22,11 +26,18 @@ Example of operation:
  	- Same as above except the server will look for foo->bar.py to find the
  	  Service class 
 
-A service must implement the WebSockets.Service class which is in the form of a
-multiprocessing.Process. The class must be named Service. The main method for
-the service should reside in the run() method. Client sockets are sent using the
-WebSockets.Service.clientConnQueue which is a multiprocessing.Queue. Services
-themselves are free to use threading instead of multiprocessing if they would
-like. Services should also terminate once they no longer have any client sockets
-attached to them to save memory. Services should be built in such a way that if
-they have to be stopped and resumed later they can do so without any problems.
+A service must implement the Services.Service class which is in the form of a
+threading.thread. The class must be named Service. The main method for
+the service should reside in the run() method. Client sockets are sent as a
+tuple along the Services.Service.clientConnQueue which is a Queue.Queue. The
+first index of the tuple is the socket and the second index is the address
+tuple. When the client is received by a service it is ready for data since the
+WebSocketServer class which accepts the connection performs handshakes and
+rejects any clients that do not give correct handshakes.
+
+Since a service may have any number of clients connected at a time for long
+periods of time, the use of threads on a per-client basis is discouraged.
+Resources would quickly be eaten away if 10 services had 1000 clients each and
+each client ran its own thread. The end user is encouraged to figure out
+different ways of managing clients. One way is to use the provided WebSocketClient
+class. An example follows:

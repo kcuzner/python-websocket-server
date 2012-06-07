@@ -1,7 +1,6 @@
 
 import socket
 import select
-import struct
 import threading
 import Queue
 import time
@@ -190,7 +189,9 @@ class WebSocketClient:
                         if s.open == False:
                             #remove this socket from our list
                             print "Notice: Socket", s, "removed."
+                            s.handle_close()
                             self.sockets.remove(s)
+                            continue #skip the rest of this
                         #sadly, we need to call select on every socket individually so that we can keep track of the WebSocketClient class
                         sList = [ s.connection ]
                         try:
@@ -207,6 +208,9 @@ class WebSocketClient:
                             try:
                                 received = r[0].recv(4096) #we will receive up to 4096 bytes
                                 receivedBytes = bytearray(received)
+                                if len(receivedBytes) == 0:
+                                    #the socket was gracefully closed on the other end
+                                    s.close()
                                 while len(receivedBytes) > 0:
                                     receivedBytes = s._readProgress.receive(receivedBytes)
                                     if s._readProgress.state == WebSocketClient.WebSocketRecvState.STATE_DONE:
@@ -265,30 +269,32 @@ class WebSocketClient:
                 WebSocketClient._sendRecvThread.sockets.append(s)
         logging.debug("Socket" + str(s) + "added to _sendRecvThread for management")
     
-    def __init__(self, conn, addr):
-        """Initializes the web socket
+    def __init__(self, conn, addr, handle_recv, handle_close):
+        """Initializes the web socket client
         
         conn: socket object to use as the connection which has already had it's hand shaken
         addr: address of the client
-        
-        Note that the variable handle_recv must be set after this initialization otherwise
-        eventually the receive queue will overflow and data will be lost."""
+        handle_recv: function to call when something has been received
+        handle_close: function to call when the socket has been closed"""
         self.connection = conn
         self.address = addr
         self.open = True #we assume it is open
-        self.handle_recv = None
+        self.handle_recv = handle_recv
+        self.handle_close = handle_close
         self.sendQueue = Queue.Queue()
         self.recvQueue = Queue.Queue()
         self._readProgress = WebSocketClient.WebSocketRecvState()
         self._writeProgress = None
         WebSocketClient._addWebSocket(self)
     
-    def send(self, data):
+    def queueSend(self, data):
         """Queues some data for sending over the connection for this object. Data should be a string"""
         self.sendQueue.put(data)
     
     def close(self):
         """Closes the connection"""
+        if not self.open:
+            return
         self.open = False
         self.connection.shutdown(socket.SHUT_RDWR)
         self.connection.close()

@@ -55,17 +55,16 @@ class WebSocketServer:
         while self.shutdownEvent.is_set() == False:
             try:
                 #get a new client
-                conn, addr = server.accept()
-                print "Client connected from", addr
-                request = conn.recv(4096)
+                connInfo = server.accept()
+                print "Client connected from", connInfo[1]
+                request = connInfo[0].recv(4096)
                 response, close, service = self.handshake(request)
-                conn.send(response)
+                connInfo[0].send(response)
                 if close:
-                    print "Invalid request from", addr
-                    conn.close()
+                    print "Invalid request from", connInfo[1]
+                    connInfo[1].close()
                     continue
-                client = WebSockets.WebSocketClient(conn, addr)
-                service.clientConnQueue.put(client)
+                service.clientConnQueue.put(connInfo)
                 
             except KeyboardInterrupt:
                 self.shutdownEvent.set() #shut down gracefully
