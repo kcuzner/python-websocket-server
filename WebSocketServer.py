@@ -9,7 +9,6 @@ import ConfigParser
 import imp
 import threading
 import WebSockets
-import logging
 
 HTTP_METHOD = "GET"
 HTTP_VERSION = "HTTP/1.1"
