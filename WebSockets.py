@@ -2,6 +2,7 @@
 import socket
 import select
 import threading
+import multiprocessing
 import Queue
 import time
 import collections
@@ -22,96 +23,105 @@ class WebSocketInvalidDataException(Exception):
     """Raised when receiving data goes horribly wrong (namely...it got something unexpected)"""
     pass
 
+class WebSocketTransaction:
+        """Contains transaction data which is passed through the queues when sending
+        or receiving data."""
+        TRANSACTION_DATA = 0
+        TRANSACTION_CLOSE = 1
+        def __init__(self, transactionType, data):
+            self.transactionType = transactionType
+            self.data = data
+
 class WebSocketClient:
-    """Class which takes care of sending and receiving data to and from a HTTP WebSocket."""
+    """Contains socket information about a client which is connected to the server."""
     
     class WebSocketRecvState:
-        """Representation of the state of an in progress receiving operation"""
-        STATE_TYPE = 0 #this state is used when the type byte is the next thing to receive
-        STATE_LEN = 1 #this state is used when the length bytes still have some bytes which should be received next
-        STATE_MASK = 2 #this state is used when the masks still ahve some bytes which should be received next
-        STATE_PAYLOAD = 3 #this state is used when the payload still has some bytes which should be received next
-        STATE_DONE = 4 #this state is used when the web socket is done receiving
-        def __init__(self):
-            """Initializes an initial receive state to nothing recieved yet"""
-            self.typeByte = None
-            self.lenBytes = bytearray()
-            self.computedLength = 0
-            self.maskBytes = bytearray()
-            self.maskIndex = 0
-            self.unmaskedPayloadBytes = bytearray()
-            self.state = WebSocketClient.WebSocketRecvState.STATE_TYPE
-        
-        def receive(self, receivedBytes):
-            """Processes some bytes into this object. Returns the unprocessed bytes.
+            """Representation of the state of an in progress receiving operation"""
+            STATE_TYPE = 0 #this state is used when the type byte is the next thing to receive
+            STATE_LEN = 1 #this state is used when the length bytes still have some bytes which should be received next
+            STATE_MASK = 2 #this state is used when the masks still ahve some bytes which should be received next
+            STATE_PAYLOAD = 3 #this state is used when the payload still has some bytes which should be received next
+            STATE_DONE = 4 #this state is used when the web socket is done receiving
+            def __init__(self):
+                """Initializes an initial receive state to nothing recieved yet"""
+                self.typeByte = None
+                self.lenBytes = bytearray()
+                self.computedLength = 0
+                self.maskBytes = bytearray()
+                self.maskIndex = 0
+                self.unmaskedPayloadBytes = bytearray()
+                self.state = WebSocketClient.WebSocketRecvState.STATE_TYPE
             
-            This operates as a state machine on the bytes as though they are an array. It
-            processes each byte individually and changes the state depending on the value
-            of the byte. In the case where there aren't enough bytes to complete a receive
-            sequence (going from STATE_TYPE to STATE_DONE), it should pick up where it left
-            off on the next receive."""
-            byteQueue = collections.deque(receivedBytes)
-            while len(byteQueue) > 0 and self.state != WebSocketClient.WebSocketRecvState.STATE_DONE:
-                b = byteQueue.popleft() #pop from the beginning like a queue
-                if self.state == WebSocketClient.WebSocketRecvState.STATE_TYPE:
-                    #process this byte as the initial type declarer
-                    if b != 0x81:
-                        #this shouldn't be anything but 0x81
-                        raise WebSocketInvalidDataException()
-                    self.typeByte = b
-                    self.state = WebSocketClient.WebSocketRecvState.STATE_LEN
-                elif self.state == WebSocketClient.WebSocketRecvState.STATE_LEN:
-                    #process this byte as part of the length
-                    if len(self.lenBytes) == 0:
-                        #this is the first byte
-                        if b < 0x80:
-                            #it should have its 8th bit set since we need masked communication
+            def receive(self, receivedBytes):
+                """Processes some bytes into this object. Returns the unprocessed bytes.
+                
+                This operates as a state machine on the bytes as though they are an array. It
+                processes each byte individually and changes the state depending on the value
+                of the byte. In the case where there aren't enough bytes to complete a receive
+                sequence (going from STATE_TYPE to STATE_DONE), it should pick up where it left
+                off on the next receive."""
+                byteQueue = collections.deque(receivedBytes)
+                while len(byteQueue) > 0 and self.state != WebSocketClient.WebSocketRecvState.STATE_DONE:
+                    b = byteQueue.popleft() #pop from the beginning like a queue
+                    if self.state == WebSocketClient.WebSocketRecvState.STATE_TYPE:
+                        #process this byte as the initial type declarer
+                        if b != 0x81:
+                            #this shouldn't be anything but 0x81
                             raise WebSocketInvalidDataException()
-                        b = b & 0x7F #unmask it
-                        self.lenBytes.append(b)
-                        #figure out what to do next
-                        if b <= 0x7D:
-                            #this is the only length byte we need. time to move on to masks
-                            self.computedLength = b
-                            self.state = WebSocketClient.WebSocketRecvState.STATE_MASK
-                        #if we haven't changed the state by now, it needs some more information
-                    elif self.lenBytes[0] == 0x7E:
-                        #two bytes length (16 bits)
-                        self.lenBytes.append(b)
-                        if len(self.lenBytes) == 3:
-                            #this was the last one
-                            self.computedLength = ((self.lenBytes[1] & 0xFF) << 8 | (self.lenBytes[2] & 0xFF))
-                            self.state = WebSocketClient.WebSocketRecvState.STATE_MASK
-                    elif self.lenBytes[0] == 0x7F:
-                        #eight bytes length (64 bits)
-                        self.lenBytes.append(b)
-                        if len(self.lenBytes) == 9:
-                            #this was the last one
-                            self.computedLength = (self.lenBytes[1] & 0xFF) << 56
-                            self.computedLength |= (self.lenBytes[2] & 0xFF) << 48
-                            self.computedLength |= (self.lenBytes[3] & 0xFF) << 40
-                            self.computedLength |= (self.lenBytes[4] & 0xFF) << 32
-                            self.computedLength |= (self.lenBytes[5] & 0xFF) << 24
-                            self.computedLength |= (self.lenBytes[6] & 0xFF) << 16
-                            self.computedLength |= (self.lenBytes[7] & 0xFF) << 8
-                            self.computedLength |= self.lenBytes[8] & 0xFF
-                            self.state = WebSocketClient.WebSocketRecvState.STATE_MASK
-                elif self.state == WebSocketClient.WebSocketRecvState.STATE_MASK:
-                    #process this byte as part of the masks
-                    self.maskBytes.append(b)
-                    if len(self.maskBytes) == 4:
-                        #all masks received
-                        self.state = WebSocketClient.WebSocketRecvState.STATE_PAYLOAD
-                elif self.state == WebSocketClient.WebSocketRecvState.STATE_PAYLOAD:
-                    #process this byte as part of the payload
-                    b = b ^ self.maskBytes[self.maskIndex]
-                    self.maskIndex = (self.maskIndex + 1) % 4
-                    self.unmaskedPayloadBytes.append(b)
-                    if len(self.unmaskedPayloadBytes) == self.computedLength:
-                        #we are done receiving
-                        self.state = WebSocketClient.WebSocketRecvState.STATE_DONE
-            #process the remaining bytes into a bytearray and return it
-            return bytearray(byteQueue)
+                        self.typeByte = b
+                        self.state = WebSocketClient.WebSocketRecvState.STATE_LEN
+                    elif self.state == WebSocketClient.WebSocketRecvState.STATE_LEN:
+                        #process this byte as part of the length
+                        if len(self.lenBytes) == 0:
+                            #this is the first byte
+                            if b < 0x80:
+                                #it should have its 8th bit set since we need masked communication
+                                raise WebSocketInvalidDataException()
+                            b = b & 0x7F #unmask it
+                            self.lenBytes.append(b)
+                            #figure out what to do next
+                            if b <= 0x7D:
+                                #this is the only length byte we need. time to move on to masks
+                                self.computedLength = b
+                                self.state = WebSocketClient.WebSocketRecvState.STATE_MASK
+                            #if we haven't changed the state by now, it needs some more information
+                        elif self.lenBytes[0] == 0x7E:
+                            #two bytes length (16 bits)
+                            self.lenBytes.append(b)
+                            if len(self.lenBytes) == 3:
+                                #this was the last one
+                                self.computedLength = ((self.lenBytes[1] & 0xFF) << 8 | (self.lenBytes[2] & 0xFF))
+                                self.state = WebSocketClient.WebSocketRecvState.STATE_MASK
+                        elif self.lenBytes[0] == 0x7F:
+                            #eight bytes length (64 bits)
+                            self.lenBytes.append(b)
+                            if len(self.lenBytes) == 9:
+                                #this was the last one
+                                self.computedLength = (self.lenBytes[1] & 0xFF) << 56
+                                self.computedLength |= (self.lenBytes[2] & 0xFF) << 48
+                                self.computedLength |= (self.lenBytes[3] & 0xFF) << 40
+                                self.computedLength |= (self.lenBytes[4] & 0xFF) << 32
+                                self.computedLength |= (self.lenBytes[5] & 0xFF) << 24
+                                self.computedLength |= (self.lenBytes[6] & 0xFF) << 16
+                                self.computedLength |= (self.lenBytes[7] & 0xFF) << 8
+                                self.computedLength |= self.lenBytes[8] & 0xFF
+                                self.state = WebSocketClient.WebSocketRecvState.STATE_MASK
+                    elif self.state == WebSocketClient.WebSocketRecvState.STATE_MASK:
+                        #process this byte as part of the masks
+                        self.maskBytes.append(b)
+                        if len(self.maskBytes) == 4:
+                            #all masks received
+                            self.state = WebSocketClient.WebSocketRecvState.STATE_PAYLOAD
+                    elif self.state == WebSocketClient.WebSocketRecvState.STATE_PAYLOAD:
+                        #process this byte as part of the payload
+                        b = b ^ self.maskBytes[self.maskIndex]
+                        self.maskIndex = (self.maskIndex + 1) % 4
+                        self.unmaskedPayloadBytes.append(b)
+                        if len(self.unmaskedPayloadBytes) == self.computedLength:
+                            #we are done receiving
+                            self.state = WebSocketClient.WebSocketRecvState.STATE_DONE
+                #process the remaining bytes into a bytearray and return it
+                return bytearray(byteQueue)
     
     
     
@@ -187,10 +197,11 @@ class WebSocketClient:
                 with self.socketListLock:
                     for s in self.sockets:
                         if s.open == False:
-                            #remove this socket from our list
+                            #remove this socket from our list and put this event into the receive queue
                             print "Notice: Socket", s, "removed."
-                            s.handle_close()
+                            s.recvQueue.put(WebSocketTransaction(WebSocketTransaction.TRANSACTION_CLOSE, None))
                             self.sockets.remove(s)
+                            s.handleTransaction() #since we are continuing, no further transactions will happen
                             continue #skip the rest of this
                         #sadly, we need to call select on every socket individually so that we can keep track of the WebSocketClient class
                         sList = [ s.connection ]
@@ -216,7 +227,8 @@ class WebSocketClient:
                                     if s._readProgress.state == WebSocketClient.WebSocketRecvState.STATE_DONE:
                                         #a string was read, so put it in the queue
                                         try:
-                                            s.recvQueue.put_nowait(s._readProgress.unmaskedPayloadBytes.decode(sys.getdefaultencoding()))
+                                            transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, s._readProgress.unmaskedPayloadBytes.decode(sys.getdefaultencoding()))
+                                            s.recvQueue.put_nowait(transaction)
                                         except Queue.Full:
                                             logging.warning("Notice: Receive queue full on WebSocketClient" + str(s) + "... did you forget to empty the queue or call task_done?")
                                             pass #oh well...I guess their data gets to be lost since they didn't bother to empty their queue
@@ -238,18 +250,23 @@ class WebSocketClient:
                             elif not s.sendQueue.empty():
                                 #there is something new to start sending
                                 try:
-                                    toWrite = self._stringToFrame(s.sendQueue.get_nowait())
-                                    try:
-                                        self._sendToSocket(toWrite, s.connection)
-                                    except socket.error:
-                                        #probably a broken pipe. don't worry about it...it will be caught on the next loop around
-                                        pass
-                                    s.sendQueue.task_done()
+                                    transaction = s.sendQueue.get_nowait()
+                                    if (transaction.transactionType == WebSocketTransaction.TRANSACTION_CLOSE):
+                                        #they want us to close the socket...
+                                        s.close()
+                                    else:
+                                        #they want us to write something to the socket
+                                        toWrite = self._stringToFrame(transaction.data)
+                                        try:
+                                            self._sendToSocket(toWrite, s.connection)
+                                        except socket.error:
+                                            #probably a broken pipe. don't worry about it...it will be caught on the next loop around
+                                            pass
                                 except Queue.Empty:
                                     pass #don't worry about it...we just couldn't get anything
                         #find out if their received event needs to be called
-                        if s.recvQueue.empty() != True and s.handle_recv != None:
-                            s.handle_recv()
+                        if s.recvQueue.empty() != True:
+                            s.handleTransaction()
                     l = len(self.sockets)
                 time.sleep(0.025) #wait 25ms for anything else to happen on the socket so we don't use 100% cpu on this one thread
     
@@ -269,27 +286,59 @@ class WebSocketClient:
                 WebSocketClient._sendRecvThread.sockets.append(s)
         logging.debug("Socket" + str(s) + "added to _sendRecvThread for management")
     
-    def __init__(self, conn, addr, handle_recv, handle_close):
+    def __init__(self, conn, addr, delegatingPool):
         """Initializes the web socket client
         
         conn: socket object to use as the connection which has already had it's hand shaken
         addr: address of the client
-        handle_recv: function to call when something has been received
-        handle_close: function to call when the socket has been closed"""
+        delegatingPool: multiprocessing.Pool which is used to send events asynchronously to listening subscribers"""
         self.connection = conn
         self.address = addr
+        self.delegatingPool = delegatingPool
         self.open = True #we assume it is open
-        self.handle_recv = handle_recv
-        self.handle_close = handle_close
-        self.sendQueue = Queue.Queue()
-        self.recvQueue = Queue.Queue()
+        self.subscribers = {}
+        self.subscriberId = 0
+        self.subscriberLock = multiprocessing.Lock()
+        self.sendQueue = multiprocessing.Queue()
+        self.recvQueue = multiprocessing.Queue()
         self._readProgress = WebSocketClient.WebSocketRecvState()
         self._writeProgress = None
         WebSocketClient._addWebSocket(self)
     
-    def queueSend(self, data):
-        """Queues some data for sending over the connection for this object. Data should be a string"""
-        self.sendQueue.put(data)
+    def getClientInformation(self):
+        """Returns information to be used by other processes to communicate to
+        this socket. Communication to and from the socket is done by Queues which
+        transmit WebSocketClient.Transaction objects. Returns a list with the
+        following in this order:
+         - Address tuple containing client address information
+         - multiprocessing.Queue for sending transactions
+         - multiprocessing.Queue for receiving transactions
+         - callback for adding a subscriber function (format: subscribe(handle) which returns a subscription id)
+         - callback for removing a subscriber function (format: unsubscribe(subscriptionId) )"""
+        return (self.address, self.sendQueue, self.recvQueue, self.subscribe, self.unsubscribe)
+    
+    def subscribe(self, handle):
+        """Subscribes a transaction handler to this object. Returns an ID that can
+        be used to remove a subscription."""
+        ret = self.subscriberId
+        with self.subscriberLock:
+            self.subscribers[self.subscriberId] = handle
+            self.subscriberId = self.subscriberId + 1
+        return ret
+    
+    def unsubscribe(self, subscriptionId):
+        """Unsubscribes a transaction handler from this object based on the passed
+        id."""
+        with self.subscriberLock:
+            self.subscribers.pop(subscriptionId)
+    
+    def handleTransaction(self):
+        """Calls all the subscribed handle functions when something needs to be
+        picked up from the recvQueue."""
+        with self.subscriberLock:
+            for subscription in self.subscribers:
+                self.subscribers[subscription]()
+                #self.delegatingPool.jobQueue.put(self.subscribers[subscription])
     
     def close(self):
         """Closes the connection"""

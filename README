@@ -27,17 +27,38 @@ Example of operation:
  	  Service class 
 
 A service must implement the Services.Service class which is in the form of a
-threading.thread. The class must be named Service. The main method for
-the service should reside in the run() method. Client sockets are sent as a
-tuple along the Services.Service.clientConnQueue which is a Queue.Queue. The
-first index of the tuple is the socket and the second index is the address
-tuple. When the client is received by a service it is ready for data since the
-WebSocketServer class which accepts the connection performs handshakes and
-rejects any clients that do not give correct handshakes.
+multiprocessing.Process. The class must be named Service. The main method for
+the service should reside in the run() method. Services are imported to run as
+though they were in the root directory of the server. The service should monitor
+the clientConnQueue which is a multiprocessing.Queue. Information for attaching
+the service to received clients will be sent up this queue in a 5 item list
+which is returned by WebSocketClient.getClientInformation(). Services should use
+these 5 values to communicate to and receive from the WebSocket.
 
-Since a service may have any number of clients connected at a time for long
-periods of time, the use of threads on a per-client basis is discouraged.
-Resources would quickly be eaten away if 10 services had 1000 clients each and
-each client ran its own thread. The end user is encouraged to figure out
-different ways of managing clients. One way is to use the provided WebSocketClient
-class. An example follows:
+Communication to WebSockets is an event based model with an event being fired
+when something happens on the client and the data being available in its
+received queue. Using a multithreaded approach for handling individual clients
+in each Service is discouraged because of the ease of quickly overwhelming the
+server resources (imagine 10,000 long lived sockets on a single processes each
+with its own thread...lots of resources). WebSockets are managed as a group
+in a separate thread in the main server process to eliminate this problem.
+Services do not have direct access to the socket object itself due to
+complications in transferring sockets between processes. Instead, queues are
+used to communicate with the socket indirectly. An added benefit of this is that
+the actual WebSockets protocol is handled by the WebSocket managing thread. To
+send data to a socket, a WebSocketClient.Transaction object should be pushed
+into the sendQueue of the client. Conversely, received transaction objects will
+be made available in the recvQueue.
+
+Services may implement any model for managing the clients which are connected to
+the service. A suggestion (which may not be the best for all services) is to
+create a class which uses the 5 arguments passed through the clientConnQueue in
+its constructor and subscribes its own methods to the transaction handling
+events in order to keep the socket encapsulated as an object.
+
+The server also provides some limited base classes which can be used to create
+an event driven model for a service by way of "subscriptions". This system was
+inspired at least partially by the subscription system used in knockoutjs to
+create "update" events for normal objects. Services.Subscribable can be
+inherited by any class wishing to use the subscription system. Documentation on
+the exact usage of this can be found the Subscribable class itself.

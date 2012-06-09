@@ -6,25 +6,36 @@ import time
 import threading
 import json
 
-class Chatter(WebSockets.WebSocketClient):
+from WebSockets import WebSocketTransaction
+
+class Chatter:
     STATE_INITIALIZE = 0
     STATE_SELECTING = 1
     STATE_CHATTING = 2
-    def __init__(self, conn, addr, chatrooms):
-        WebSockets.WebSocketClient.__init__(self, conn, addr, self.onReceived, self.onClose)
+    def __init__(self, addr, sendQueue, recvQueue, socketSubscriber, socketUnsubscriber, chatrooms):
+        self.address = addr;
+        self.sendQueue = sendQueue;
+        self.recvQueue = recvQueue;
+        self.socketSubscriptionId = socketSubscriber(self.onReceived)
+        self.socketUnsubscriber = socketUnsubscriber
         self.chatrooms = chatrooms
         self.chatroom = None
         self.subscriptionId = None
         self.state = Chatter.STATE_INITIALIZE
         data = { "type" : "query", "query" : "name"}
-        self.queueSend(json.dumps(data))
+        transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, json.dumps(data))
+        self.sendQueue.put(transaction)
             
     def onReceived(self):
         """Handles a received json string from the client"""
         #find out what they sent us
         while self.recvQueue.empty() == False:
             received = self.recvQueue.get()
-            data = json.loads(received)
+            if received.transactionType == WebSocketTransaction.TRANSACTION_CLOSE:
+                print "Woe is me for I am undone"
+                continue
+            #if we made it this far, it was normal data being received
+            data = json.loads(received.data)
             if self.state == Chatter.STATE_INITIALIZE:
                 #we only want a name given
                 if "type" in data:
@@ -35,7 +46,8 @@ class Chatter(WebSockets.WebSocketClient):
                         print self.name, " now chatting."
                         return
                 #only ask for a name if they sent us something else
-                self.queueSend(json.dumps({ 'type' : 'query', 'query' : 'name' }))
+                transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, json.dumps({ 'type' : 'query', 'query' : 'name' }))
+                self.sendQueue.put(transaction)
             if self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
                 #in selection mode or chatting mode
                 if "type" in data:
@@ -55,7 +67,8 @@ class Chatter(WebSockets.WebSocketClient):
                             self.chatroom = toJoin
                             self.subscriptionId = self.chatroom.subscribe(self)
                             self.state = Chatter.STATE_CHATTING
-                        self.queueSend(json.dumps(ret))
+                        transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, json.dumps(ret))
+                        self.sendQueue.put(transaction)
                     if data["type"] == "create" and "chatroom" in data:
                         #create a new chatroom
                         self.chatrooms.createChatroom(data["chatroom"]) #if this works, a chatroom event will happen
@@ -71,25 +84,22 @@ class Chatter(WebSockets.WebSocketClient):
 
     def onChatroomEvent(self, event):
         """Called by the chatroom object to tell us something"""
+        data = {}
         if event.eventId == Chatroom.ChatroomEvent.EV_LISTING:
             #they are listing all their rooms to us
             data = { 'type' : 'event', 'event' : { 'type' : 'listing', 'chatrooms' : event.data } }
-            self.queueSend(json.dumps(data))
-            
-        if self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
+        elif self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
             #we ignore some events unless we are chatting
             if event.eventId == Chatroom.ChatroomEvent.EV_MESSAGE:
                 data = { 'type' : 'event', 'event' : { 'type' : 'message', 'name' : event.data[0], 'message' : event.data[1] } }
-                self.queueSend(json.dumps(data))
             elif event.eventId == Chatroom.ChatroomEvent.EV_NEWSUBSCRIBER:
                 data = { 'type' : 'event', 'event' : { 'type' : 'newuser', 'name' : event.data } }
-                self.queueSend(json.dumps(data))
             elif event.eventId == Chatroom.ChatroomEvent.EV_UNSUBSCRIBE:
                 data = { 'type' : 'event', 'event' : { 'type' : 'logoff', 'name' : event.data } }
-                self.queueSend(json.dumps(data))
             elif event.eventId == Chatroom.ChatroomEvent.EV_CREATE:
                 data = { 'type' : 'event', 'event' : { 'type' : 'newchatroom', 'name' : event.data } }
-                self.queueSend(json.dumps(data))
+        transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, json.dumps(data))
+        self.sendQueue.put(transaction)
 
 class ChatroomCollection(Services.Subscribable):
     """A list of chatrooms that supports "subscriptions" """
@@ -167,9 +177,9 @@ class Service(Services.Service):
         try:
             while self.shutdownFlag.is_set() == False:
                 try:
-                    clientInfo = self.clientConnQueue.get_nowait()
-                    print "Got client from", clientInfo[1]
-                    chatter = Chatter(clientInfo[0], clientInfo[1], self.chatrooms)
+                    addr, sendQueue, recvQueue, socketSubscriber, socketUnsubscriber = self.clientConnQueue.get_nowait()
+                    print "Got client from", addr
+                    chatter = Chatter(addr, sendQueue, recvQueue, socketSubscriber, socketUnsubscriber, self.chatrooms)
                     self.chatrooms.subscribe(chatter)
                     self.clientConnQueue.task_done()
                 except Queue.Empty:

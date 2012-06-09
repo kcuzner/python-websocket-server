@@ -1,5 +1,46 @@
 """Contains classes for dealing with process management for the WebSocketServer"""
 
+import time
+import multiprocessing
+
+class DelegatingProcessPool:
+    """Pool of processes which are used for executing delegation functions"""
+    def __init__(self):
+        self.numWorkers = multiprocessing.cpu_count()
+        self.stopSignal = multiprocessing.Event() #this is set when any of the child threads gets a keyboard interrupt or when the processes need to stop
+        self.jobQueue = multiprocessing.Queue()
+        self.workers = []
+        #start a maintenance thread to ensure we always have the right amount of workers
+        maintenance = multiprocessing.Process(None, self.maintenance)
+        maintenance.start()
+    
+    def maintenance(self):
+        """Runs in the background to ensure the correct number of processes are running"""
+        try:
+            while self.stopSignal.is_set() == False:
+                if len(self.workers) < self.numWorkers:
+                    #one stopped somehow
+                    worker = multiprocessing.Process(None, self.worker)
+                    worker.start()
+                    self.workers.append(worker)
+                else:
+                    time.sleep(0.1) #wait 1/10 second to do this again
+        except KeyboardInterrupt:
+            self.stopSignal.set()
+    
+    def worker(self):
+        """Works on a process"""
+        try:
+            while self.stopSignal.is_set() == False:
+                if self.jobQueue.empty():
+                    time.sleep(0.010) #wait 10ms for the next job
+                    continue
+                toRun = self.jobQueue.get()
+                toRun()
+        except KeyboardInterrupt:
+            #take down all our processes
+            self.stopSignal.set()
+
 class ProcessDirectory:
     """Class which is used to store processes in a "directory" tree. When a process
     is running, it can be found inside the process directories. When it isn't running

@@ -8,6 +8,7 @@ import Processes
 import ConfigParser
 import imp
 import threading
+import multiprocessing
 import WebSockets
 import logging
 
@@ -50,21 +51,24 @@ class WebSocketServer:
         server.bind(ADDR)
         server.listen(5)
         
+        delegatingPool = Processes.DelegatingProcessPool()
+        
         print "Server started. Listening for connections..."
         
         while self.shutdownEvent.is_set() == False:
             try:
                 #get a new client
-                connInfo = server.accept()
-                print "Client connected from", connInfo[1]
-                request = connInfo[0].recv(4096)
+                conn, addr = server.accept()
+                print "Client connected from", addr
+                request = conn.recv(4096)
                 response, close, service = self.handshake(request)
-                connInfo[0].send(response)
+                conn.send(response)
                 if close:
-                    print "Invalid request from", connInfo[1]
-                    connInfo[1].close()
+                    print "Invalid request from", addr
+                    addr.close()
                     continue
-                service.clientConnQueue.put(connInfo)
+                client = WebSockets.WebSocketClient(conn, addr, delegatingPool)
+                service.clientConnQueue.put(client.getClientInformation())
                 
             except KeyboardInterrupt:
                 self.shutdownEvent.set() #shut down gracefully
@@ -91,7 +95,7 @@ class WebSocketServer:
                     path = self.config.get('server', 'document-root') + '/'.join(location)
                     try:
                         service = imp.load_source(incpath, path)
-                        s = service.Service()
+                        s = service.Service(multiprocessing.Queue())
                         s.start()
                         current.addProcess(location[-1], s)
                     except (ImportError, IOError):

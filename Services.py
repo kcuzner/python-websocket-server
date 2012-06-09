@@ -1,19 +1,19 @@
 """Some basic classes for services to use for implementation"""
 
-import threading
-import Queue
+import multiprocessing
 
-class Service(threading.Thread):
+class Service(multiprocessing.Process):
     """Base class for all services.
     
     Services should implement a run() method which is an extension of the Process
     class. In this method there should be a main loop which exits when the shutdownflag
     is set. The service should constantly watch the clientConnQueue since this is
     where clients will enter the service from. The clients are of the class WebSocketClient"""
-    def __init__(self):
-        threading.Thread.__init__(self)
-        self.clientConnQueue = Queue.Queue()
-        self.shutdownFlag = threading.Event()
+    def __init__(self, clientConnQueue):
+        multiprocessing.Process.__init__(self)
+        #self.manager = multiprocessing.Manager()
+        self.clientConnQueue = clientConnQueue #self.manager.Queue()
+        self.shutdownFlag = multiprocessing.Event()
 
 
 class Subscribable:
