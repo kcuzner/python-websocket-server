@@ -25,11 +25,13 @@ class WebSocketInvalidDataException(Exception):
 
 class WebSocketTransaction:
         """Contains transaction data which is passed through the queues when sending
-        or receiving data."""
-        TRANSACTION_DATA = 0
-        TRANSACTION_CLOSE = 1
-        def __init__(self, transactionType, data):
+        or receiving data to or from a socket."""
+        TRANSACTION_NEWSOCKET = 0 #used on the socket notification queue to inform a service it has a new socket with the given id
+        TRANSACTION_DATA = 1 #used on send/recv queues to send/receive data to/from a socket
+        TRANSACTION_CLOSE = 2 #used on send/recv queues to close the socket or inform the service the socket has been closed
+        def __init__(self, transactionType, socketId, data):
             self.transactionType = transactionType
+            self.socketId = socketId
             self.data = data
 
 class WebSocketClient:
@@ -125,29 +127,34 @@ class WebSocketClient:
     
     
     
-    class WebSocketSendRecvThread(threading.Thread):
-        """Thread which takes care of sending and receiving asyncronously from a WebSocket.
+    class WebSocketManager(threading.Thread):
+        """Thread which manages communication between WebSockets and their clients.
         
-        Each WebSocket must have a Queue.Queue called sendQueue. String messages to be sent should
-        be placed into that queue.
+        This asyncronously sends/receives data to/from sockets while at the same time
+        handling the service send/recv queues in a "switchboard" like fashion."""
         
-        There must be a Queue.Queue called recvQueue as well. When a receive is completed, the received
-        string will be placed in this queue and handle_recv will be called. Note that handle_recv is called
-        after all packets have been received for the select loop and so it could possibly contain multiple
-        received strings. Progress on the current item will be stored in a variable in the WebSocketClient
-        class called _writeProgress.
-        
-        The WebSocketSendRecvThread will store in progress reads in a variable in the WebSocketClient
-        class called _readProgress.
-        
-        Note that since this is asncyronous send and receive times are not guaranteed and a sent message
-        could be sent and received before a message sent from other other end could be entirely read."""
-        
-        def __init__(self, socketList):
-            """Initializes a new WebSocketSendRecvThread"""
+        def __init__(self, socketList, stopEvent, processDirectory):
+            """Initializes a new WebSocketSendRecvThread with the given sockets,
+            a multiprocessing.Event (stopEvent) to stop the thread gracefully, and
+            the process directory which will contain all the processes"""
             threading.Thread.__init__(self)
-            self.sockets = socketList
+            self.sockets = {} #sockets are stored sorted by their unique ids
+            for sock in socketList:
+                self.sockets[sock.id] = sock
             self.socketListLock = threading.Lock()
+            self.stopEvent = stopEvent
+            self.processDirectory = processDirectory
+        
+        def addWebSocket(self, s):
+            """Adds a socket to the list to be asyncronously managed. Returns if it was successful"""
+            if self.isAlive() == False:
+                #create a new one
+                return False
+            else:
+                #add to the existing one
+                with self.socketListLock:
+                    self.sockets[s.id] = s
+                return True
         
         def _stringToFrame(self, data):
             """Turns a string into a WebSocket data frame. Returns a bytes(). 'data' is a string"""
@@ -189,20 +196,56 @@ class WebSocketClient:
             else:
                 return data[nSent:] #if we didn't send the whole thing, return from the last index sent to the end
         
+        def __queueHelper(self):
+            """Thread method to operate the "switchboard" between server queues and the individual socket queues"""
+            while self.stopEvent.is_set() == False:
+                processes = self.processDirectory.getAllProcesses()
+                for pid in processes:
+                    #read through the sendQueue in this process and send it to the appropriate sockets
+                    process = processes[pid]
+                    while process.sendQueue.empty() == False:
+                        try:
+                            transaction = process.sendQueue.get_nowait()
+                            with self.socketListLock:
+                                if transaction.socketId in self.sockets:
+                                    self.sockets[transaction.socketId].sendQueue.put(transaction)                                
+                        except Queue.Empty:
+                            break
+                #get all our sockets
+                with self.socketListLock:
+                    socketIds = self.sockets.keys()
+                for sockId in socketIds:
+                    s = self.sockets[sockId] #this is a WebSocketClient
+                    try:
+                        while s.recvQueue.empty() == False:
+                            #put their receive queue into the approproate process
+                            transaction = s.recvQueue.get_nowait()
+                            processes[s.serviceId].recvQueue.put(transaction)
+                    except Queue.Empty:
+                        break;
+                time.sleep(0.005) #sleep for 5 ms before doing this again
+                
+        
         def run(self):
             """Main thread method which will run until all sockets are no longer active"""
-            with self.socketListLock:
-                l = len(self.sockets)
-            while l > 0 and WebSocketClient._sendRecvStopEvent.is_set() == False:
+            #start the queue helper
+            queueHelper = threading.Thread(target=self.__queueHelper)
+            queueHelper.start()
+            while self.stopEvent.is_set() == False:
                 with self.socketListLock:
-                    for s in self.sockets:
-                        if s.open == False:
-                            #remove this socket from our list and put this event into the receive queue
-                            print "Notice: Socket", s, "removed."
-                            s.recvQueue.put(WebSocketTransaction(WebSocketTransaction.TRANSACTION_CLOSE, None))
-                            self.sockets.remove(s)
-                            s.handleTransaction() #since we are continuing, no further transactions will happen
-                            continue #skip the rest of this
+                    #get the list of socket ids so that we can iterate through them without eating up the socket list lock
+                    #in theory, fetching an item from a dictionary in python is thread safe
+                    socketIds = self.sockets.keys()
+                for sockId in socketIds:
+                    s = self.sockets[sockId] #these are not sockets, but WebSocket objects
+                    if s.open == False:
+                        #remove this socket from our list and put this event into the receive queue
+                        print "Notice: Socket", s, "removed."
+                        s.recvQueue.put(WebSocketTransaction(WebSocketTransaction.TRANSACTION_CLOSE, None))
+                        with self.socketListLock: #not sure if removing from the dictionary is thread safe
+                            self.sockets.pop(s)
+                        continue #skip the rest of this
+                    with s.lock: #lock the individiual socket
                         #sadly, we need to call select on every socket individually so that we can keep track of the WebSocketClient class
                         sList = [ s.connection ]
                         try:
@@ -211,12 +254,14 @@ class WebSocketClient:
                             #it failed. remove this client
                             print "Notice: Socket", s, "failed."
                             s.open = False #this is no longer open, but we can't call close since it would break it some more
-                        if x:
-                            print "Notice: Socket", s, "has an exceptional condition"
+                    if x:
+                        print "Notice: Socket", s, "has an exceptional condition"
+                        with s.lock:
                             s.open = False
-                        if r:
-                            #the socket is ready to be read
-                            try:
+                    if r:
+                        #the socket is ready to be read
+                        try:
+                            with s.lock:
                                 received = r[0].recv(4096) #we will receive up to 4096 bytes
                                 receivedBytes = bytearray(received)
                                 if len(receivedBytes) == 0:
@@ -227,19 +272,20 @@ class WebSocketClient:
                                     if s._readProgress.state == WebSocketClient.WebSocketRecvState.STATE_DONE:
                                         #a string was read, so put it in the queue
                                         try:
-                                            transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, s._readProgress.unmaskedPayloadBytes.decode(sys.getdefaultencoding()))
+                                            transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, s.id, s._readProgress.unmaskedPayloadBytes.decode(sys.getdefaultencoding()))
                                             s.recvQueue.put_nowait(transaction)
                                         except Queue.Full:
                                             logging.warning("Notice: Receive queue full on WebSocketClient" + str(s) + "... did you forget to empty the queue or call task_done?")
                                             pass #oh well...I guess their data gets to be lost since they didn't bother to empty their queue
                                         s._readProgress = WebSocketClient.WebSocketRecvState() #reset the progress
-                            except socket.error:
-                                pass #don't worry about it
-                        if w:
-                            #the socket is ready to be written
-                            #for writing, the exception catcher has to be inside rather than outside
-                            #everything like the received catcher was since we need to make sure to
-                            #inform the sendqueue that we are done with the passed task
+                        except socket.error:
+                            pass #don't worry about it
+                    if w:
+                        #the socket is ready to be written
+                        #for writing, the exception catcher has to be inside rather than outside
+                        #everything like the received catcher was since we need to make sure to
+                        #inform the sendqueue that we are done with the passed task
+                        with s.lock:
                             if s._writeProgress != None:
                                 #we still have something to write
                                 try:
@@ -264,81 +310,36 @@ class WebSocketClient:
                                             pass
                                 except Queue.Empty:
                                     pass #don't worry about it...we just couldn't get anything
-                        #find out if their received event needs to be called
-                        if s.recvQueue.empty() != True:
-                            s.handleTransaction()
-                    l = len(self.sockets)
                 time.sleep(0.025) #wait 25ms for anything else to happen on the socket so we don't use 100% cpu on this one thread
     
-    _sendRecvThread = WebSocketSendRecvThread( [] )
-    _sendRecvThread.start() #it will immediately stop...this is for initial state
-    _sendRecvStopEvent = threading.Event() #this should be set by the parent thread/process to shut down all reads and writes
+    __idLock = multiprocessing.Lock()
+    __currentSocketId = 0
     @staticmethod
-    def _addWebSocket(s):
-        """Adds a socket to the list to be asyncronously managed"""
-        if WebSocketClient._sendRecvThread.isAlive() == False:
-            #create a new one
-            WebSocketClient._sendRecvThread = WebSocketClient.WebSocketSendRecvThread([ s ])
-            WebSocketClient._sendRecvThread.start()
-        else:
-            #add to the existing one
-            with WebSocketClient._sendRecvThread.socketListLock:
-                WebSocketClient._sendRecvThread.sockets.append(s)
-        logging.debug("Socket" + str(s) + "added to _sendRecvThread for management")
-    
-    def __init__(self, conn, addr, delegatingPool):
-        """Initializes the web socket client
-        
-        conn: socket object to use as the connection which has already had it's hand shaken
-        addr: address of the client
-        delegatingPool: multiprocessing.Pool which is used to send events asynchronously to listening subscribers"""
-        self.connection = conn
-        self.address = addr
-        self.delegatingPool = delegatingPool
-        self.open = True #we assume it is open
-        self.subscribers = {}
-        self.subscriberId = 0
-        self.subscriberLock = multiprocessing.Lock()
-        self.sendQueue = multiprocessing.Queue()
-        self.recvQueue = multiprocessing.Queue()
-        self._readProgress = WebSocketClient.WebSocketRecvState()
-        self._writeProgress = None
-        WebSocketClient._addWebSocket(self)
-    
-    def getClientInformation(self):
-        """Returns information to be used by other processes to communicate to
-        this socket. Communication to and from the socket is done by Queues which
-        transmit WebSocketClient.Transaction objects. Returns a list with the
-        following in this order:
-         - Address tuple containing client address information
-         - multiprocessing.Queue for sending transactions
-         - multiprocessing.Queue for receiving transactions
-         - callback for adding a subscriber function (format: subscribe(handle) which returns a subscription id)
-         - callback for removing a subscriber function (format: unsubscribe(subscriptionId) )"""
-        return (self.address, self.sendQueue, self.recvQueue, self.subscribe, self.unsubscribe)
-    
-    def subscribe(self, handle):
-        """Subscribes a transaction handler to this object. Returns an ID that can
-        be used to remove a subscription."""
-        ret = self.subscriberId
-        with self.subscriberLock:
-            self.subscribers[self.subscriberId] = handle
-            self.subscriberId = self.subscriberId + 1
+    def __getSocketId():
+        ret = None
+        with WebSocketClient.__idLock:
+            ret = WebSocketClient.__currentSocketId
+            WebSocketClient.__currentSocketId = ret + 1
         return ret
     
-    def unsubscribe(self, subscriptionId):
-        """Unsubscribes a transaction handler from this object based on the passed
-        id."""
-        with self.subscriberLock:
-            self.subscribers.pop(subscriptionId)
-    
-    def handleTransaction(self):
-        """Calls all the subscribed handle functions when something needs to be
-        picked up from the recvQueue."""
-        with self.subscriberLock:
-            for subscription in self.subscribers:
-                self.subscribers[subscription]()
-                #self.delegatingPool.jobQueue.put(self.subscribers[subscription])
+    def __init__(self, wsManager, conn, addr):
+        """Initializes the web socket client
+        
+        wsManager: websocket manager that can be used
+        conn: socket object to use as the connection which has already had it's hand shaken
+        addr: address of the client"""
+        self.id = WebSocketClient.__getSocketId()
+        self.serviceId = None #this is used externally to map this socket to a specific service
+        self.wsManager = wsManager
+        self.connection = conn
+        self.address = addr
+        self.open = True #we assume it is open
+        self.sendQueue = Queue.Queue()
+        self.recvQueue = Queue.Queue()
+        self.lock = threading.Lock() #This lock only needs to be used when accessing anything but the queues
+        self._readProgress = WebSocketClient.WebSocketRecvState()
+        self._writeProgress = None
+        wsManager.addWebSocket(self)
     
     def close(self):
         """Closes the connection"""

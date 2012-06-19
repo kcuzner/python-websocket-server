@@ -29,6 +29,9 @@ class WebSocketServer:
         self.directory = Processes.ProcessDirectory()
         self.config = None
         self.shutdownEvent = threading.Event()
+        self.manager = multiprocessing.Manager()
+        self.webSocketManager = WebSockets.WebSocketClient.WebSocketManager([], self.shutdownEvent, self.directory)
+        self.webSocketManager.start()
         #logging.basicConfig(filename="server.log", level=logging.DEBUG)
         
     def runServer(self):
@@ -51,8 +54,6 @@ class WebSocketServer:
         server.bind(ADDR)
         server.listen(5)
         
-        delegatingPool = Processes.DelegatingProcessPool()
-        
         print "Server started. Listening for connections..."
         
         while self.shutdownEvent.is_set() == False:
@@ -61,18 +62,19 @@ class WebSocketServer:
                 conn, addr = server.accept()
                 print "Client connected from", addr
                 request = conn.recv(4096)
-                response, close, service = self.handshake(request)
+                response, close, serviceRecord = self.handshake(request)
                 conn.send(response)
                 if close:
                     print "Invalid request from", addr
                     addr.close()
                     continue
-                client = WebSockets.WebSocketClient(conn, addr, delegatingPool)
-                service.clientConnQueue.put(client.getClientInformation())
+                client = WebSockets.WebSocketClient(self.webSocketManager, conn, addr)
+                #link the client to the service record
+                client.serviceId = serviceRecord.process.pid
+                serviceRecord.clientQueue.put(WebSockets.WebSocketTransaction(WebSockets.WebSocketTransaction.TRANSACTION_NEWSOCKET, client.id, addr))
                 
             except KeyboardInterrupt:
                 self.shutdownEvent.set() #shut down gracefully
-                WebSockets.WebSocketClient._sendRecvStopEvent.set()
         
         print "Shutting down server..."
         self.directory.joinAll()
@@ -82,29 +84,34 @@ class WebSocketServer:
     
     def getService(self, location):
         """Attempts to load a service based on the location relative to the document root.
-        location is the full path ->list<- including the index script if it was appended"""
+        location is the full path ->list<- including the index script if it was appended.
+        Returns a Process.ProcessDirectory.ProcessRecord."""
         current = self.directory
-        s = None
+        process = None
         for d in location:
             if d is location[-1]:
                 #find the service
-                s = current.findProcess(d)
-                if s is None:
+                process = current.findProcess(d)
+                if process is None:
                     #attempt to load the service
                     incpath = "" #'.'.join(location)
                     path = self.config.get('server', 'document-root') + '/'.join(location)
                     try:
                         service = imp.load_source(incpath, path)
-                        s = service.Service(multiprocessing.Queue())
+                        clientQueue = self.manager.Queue()
+                        sendQueue = self.manager.Queue()
+                        recvQueue = self.manager.Queue()
+                        s = service.Service(clientQueue, sendQueue, recvQueue)
                         s.start()
-                        current.addProcess(location[-1], s)
+                        process = Processes.ProcessDirectory.ProcessRecord(s, clientQueue, sendQueue, recvQueue)
+                        current.addProcess(location[-1], process)
                     except (ImportError, IOError):
                         #not found
                         pass
             else:
                 #keep going down the directory
                 current = current.findDir(d)
-        return s
+        return process
         
     
     def handshake(self, request):
