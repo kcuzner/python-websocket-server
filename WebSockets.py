@@ -221,6 +221,10 @@ class WebSocketClient:
                             #put their receive queue into the approproate process
                             transaction = s.recvQueue.get_nowait()
                             processes[s.serviceId].recvQueue.put(transaction)
+                            #if this was a close transaction, we need to remove it from our list
+                            if transaction.transactionType == WebSocketTransaction.TRANSACTION_CLOSE:
+                                with self.socketListLock:
+                                    self.sockets.pop(sockId)
                     except Queue.Empty:
                         break;
                 time.sleep(0.005) #sleep for 5 ms before doing this again
@@ -241,9 +245,7 @@ class WebSocketClient:
                     if s.open == False:
                         #remove this socket from our list and put this event into the receive queue
                         print "Notice: Socket", s, "removed."
-                        s.recvQueue.put(WebSocketTransaction(WebSocketTransaction.TRANSACTION_CLOSE, None))
-                        with self.socketListLock: #not sure if removing from the dictionary is thread safe
-                            self.sockets.pop(s)
+                        s.recvQueue.put(WebSocketTransaction(WebSocketTransaction.TRANSACTION_CLOSE, sockId, None))
                         continue #skip the rest of this
                     with s.lock: #lock the individiual socket
                         #sadly, we need to call select on every socket individually so that we can keep track of the WebSocketClient class
