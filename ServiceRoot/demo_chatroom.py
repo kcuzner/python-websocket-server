@@ -168,8 +168,8 @@ class Chatroom(Services.Subscribable):
 
 
 class Service(Services.Service):
-    def __init__(self, clientConnQueue, sendQueue, recvQueue):
-        Services.Service.__init__(self, clientConnQueue, sendQueue, recvQueue)
+    def __init__(self, sendQueue, recvQueue):
+        Services.Service.__init__(self, sendQueue, recvQueue)
         self.chatrooms = ChatroomCollection()
         self.clients = {}
     
@@ -179,20 +179,17 @@ class Service(Services.Service):
         try:
             while self.shutdownFlag.is_set() == False:
                 try:
-                    transaction = self.clientConnQueue.get_nowait()
-                    print "Got client from", transaction.data
-                    chatter = Chatter(transaction.data, transaction.socketId, self.sendQueue, self.chatrooms)
-                    self.chatrooms.subscribe(chatter)
-                    self.clientConnQueue.task_done()
-                    
-                    self.clients[chatter.socketId] = chatter
-                except Queue.Empty:
-                    pass
-                try:
                     transaction = self.recvQueue.get_nowait()
-                    #find the chatter to send this to
-                    self.clients[transaction.socketId].injectReceived(transaction)
                     self.recvQueue.task_done()
+                    if transaction.transactionType == WebSockets.WebSocketTransaction.TRANSACTION_NEWSOCKET:
+                        #we have a new client!
+                        print "Got client from", transaction.data
+                        chatter = Chatter(transaction.data, transaction.socketId, self.sendQueue, self.chatrooms)
+                        self.chatrooms.subscribe(chatter)
+                        self.clients[chatter.socketId] = chatter                        
+                    else:
+                        #find the chatter to send this to
+                        self.clients[transaction.socketId].injectReceived(transaction)
                 except Queue.Empty:
                     pass
                 except KeyError:

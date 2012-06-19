@@ -9,10 +9,8 @@ class Service(multiprocessing.Process):
     class. In this method there should be a main loop which exits when the shutdownflag
     is set. The service should constantly watch the clientConnQueue since this is
     where clients will enter the service from. The clients are of the class WebSocketClient"""
-    def __init__(self, clientConnQueue, sendQueue, recvQueue):
+    def __init__(self, sendQueue, recvQueue):
         multiprocessing.Process.__init__(self)
-        #self.manager = multiprocessing.Manager()
-        self.clientConnQueue = clientConnQueue #self.manager.Queue()
         self.sendQueue = sendQueue
         self.recvQueue = recvQueue
         self.shutdownFlag = multiprocessing.Event()

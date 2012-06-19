@@ -6,11 +6,8 @@ Kevin Cuzner
 This is a server meant to run dedicated on a specific port on the host machine.
 It provides a method to host multiple WebSocket-based services sorted by
 directory and provide a (relatively) easy interface for writing additional
-services. This server utilizes the threading library instead of the
-multiprocessing library and thus will only ever use one full core on the CPU.
-However, seeing as this is a network application, there shouldn't be huge
-problems unless a service is doing many complicated things that would cause it
-to eat CPU.
+services. This server utilizes multiprocessing for individual services and
+threading for handling the client socket operations.
 
 Example of operation:
  - WebSocketServer running on port 12345 of the host machine
@@ -29,11 +26,21 @@ Example of operation:
 A service must implement the Services.Service class which is in the form of a
 multiprocessing.Process. The class must be named Service. The main method for
 the service should reside in the run() method. Services are imported to run as
-though they were in the root directory of the server. The service should monitor
-the clientConnQueue which is a multiprocessing.Queue. Information for attaching
-the service to received clients will be sent up this queue in a 5 item list
-which is returned by WebSocketClient.getClientInformation(). Services should use
-these 5 values to communicate to and receive from the WebSocket.
+though they were in the root directory of the server. Services are provided two
+multiprocessing.Queues by the WebSocketServer: sendQueue and recvQueue. These
+queues function as pipes for socket information going to and from the service
+in the form of WebSockets.WebSocketTransactions. Services should continuously
+monitor the recvQueue to determine when to add a new client object and when to
+send data to a client object based on the socketId of the transaction object.
+The socketId is a unique identifier which is used to map to the actual
+WebSocketClient object. WebSocketClients are back-linked to the process id of
+the service process that the client is connected to. Whenever something from the
+client is sent to the server, a separate thread (a WebSocketManager class) will
+negotiate receiving the data into a transaction and sending it off to the
+appropriate service's recvQueue. On the service side of things, sending data to
+sockets is accomplished by adding a WebSockets.WebSocketTransaction object to
+the service sendQueue with a socketId matching the socket id of the client that
+was originally sent to the server.
 
 Communication to WebSockets is an event based model with an event being fired
 when something happens on the client and the data being available in its
@@ -52,9 +59,11 @@ be made available in the recvQueue.
 
 Services may implement any model for managing the clients which are connected to
 the service. A suggestion (which may not be the best for all services) is to
-create a class which uses the 5 arguments passed through the clientConnQueue in
-its constructor and subscribes its own methods to the transaction handling
-events in order to keep the socket encapsulated as an object.
+create a class which takes in the socket id that is passed to the service when
+the client connects and keep track of this client object throughout its life
+(until it receives a close transaction). Then, the service can listen to its
+recvQueue and send off the transactions to these "local" classes which would
+have a method for handling the reception of a transaction.
 
 The server also provides some limited base classes which can be used to create
 an event driven model for a service by way of "subscriptions". This system was

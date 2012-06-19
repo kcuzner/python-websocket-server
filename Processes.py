@@ -11,9 +11,8 @@ class ProcessDirectory:
     
     class ProcessRecord:
         """Holds data for a process"""
-        def __init__(self, process, clientQueue, sendQueue, recvQueue):
+        def __init__(self, process, sendQueue, recvQueue):
             self.process = process
-            self.clientQueue = clientQueue
             self.sendQueue = sendQueue
             self.recvQueue = recvQueue
         

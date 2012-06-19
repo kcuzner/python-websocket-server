@@ -70,7 +70,7 @@ class WebSocketServer:
                 client = WebSockets.WebSocketClient(self.webSocketManager, conn, addr)
                 #link the client to the service record
                 client.serviceId = serviceRecord.process.pid
-                serviceRecord.clientQueue.put(WebSockets.WebSocketTransaction(WebSockets.WebSocketTransaction.TRANSACTION_NEWSOCKET, client.id, addr))
+                serviceRecord.recvQueue.put(WebSockets.WebSocketTransaction(WebSockets.WebSocketTransaction.TRANSACTION_NEWSOCKET, client.id, addr))
                 
             except KeyboardInterrupt:
                 self.shutdownEvent.set() #shut down gracefully
@@ -97,12 +97,11 @@ class WebSocketServer:
                     path = self.config.get('server', 'document-root') + '/'.join(location)
                     try:
                         service = imp.load_source(incpath, path)
-                        clientQueue = self.manager.Queue()
                         sendQueue = self.manager.Queue()
                         recvQueue = self.manager.Queue()
-                        s = service.Service(clientQueue, sendQueue, recvQueue)
+                        s = service.Service(sendQueue, recvQueue)
                         s.start()
-                        process = Processes.ProcessDirectory.ProcessRecord(s, clientQueue, sendQueue, recvQueue)
+                        process = Processes.ProcessDirectory.ProcessRecord(s, sendQueue, recvQueue)
                         current.addProcess(location[-1], process)
                     except (ImportError, IOError):
                         #not found
