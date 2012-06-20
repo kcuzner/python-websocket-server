@@ -65,7 +65,7 @@ class WebSocketServer:
                 conn.send(response)
                 if close:
                     print "Invalid request from", addr
-                    addr.close()
+                    conn.close()
                     continue
                 client = WebSockets.WebSocketClient(self.webSocketManager, conn, addr)
                 #link the client to the service record
