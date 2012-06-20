@@ -191,8 +191,8 @@ class WebSocketServer:
 
 
 def main():
-    shortArgs = "p:h:d:"
-    longArgs = [ "port=", "host=", "document-root="]
+    shortArgs = "p:hd:o:"
+    longArgs = [ "port=", "help", "document-root=", "host="]
     showUsage = False
     overridePort = None
     overrideHost = None
@@ -207,12 +207,15 @@ def main():
                 except ValueError:
                     print "Invalid port number:", opt[1]
                     showUsage = True
-            elif opt[0] == "--host" or opt[0] == "-h":
-                #override host
-                overrideHost = opt[1]
+            elif opt[0] == "--help" or opt[0] == "-h":
+                #show help
+                showUsage = True
             elif opt[0] == "--document-root" or opt[0] == "-d":
                 #override document root
                 overrideDocRoot = opt[1]
+            elif opt[0] == "--host" or opt[0] == "-o":
+                #override host
+                overrideHost = opt[1]
     except getopt.GetoptError:
         #we get to print our usage message!
         showUsage = True
@@ -220,8 +223,9 @@ def main():
         print "Python WebSocket Server"
         print "Usage:"
         print "\t-p --port=\t\tOverride configured port number"
-        print "\t-h --host=\t\tOverride configured host"
+        print "\t-o --host=\t\tOverride configured host"
         print "\t-d --document-root=\tOverride configured document root"
+        print "\t-h --help\t\tShow this message"
         print "No arguments will start the server as configured in server.config"
         return
     
