@@ -10,6 +10,8 @@ import imp
 import threading
 import multiprocessing
 import WebSockets
+import sys
+import getopt
 
 HTTP_METHOD = "GET"
 HTTP_VERSION = "HTTP/1.1"
@@ -24,7 +26,7 @@ SERVICE_INDEX_NAME = "ws_service.py"
 
 class WebSocketServer:
     """Encapsulates a websocketserver"""
-    def __init__(self):
+    def __init__(self, overridePort=None, overrideHost=None, overrideDocRoot=None):
         self.directory = Processes.ProcessDirectory()
         self.config = None
         self.shutdownEvent = threading.Event()
@@ -186,7 +188,37 @@ class WebSocketServer:
 
 
 def main():
-    server = WebSocketServer()
+    shortArgs = "p:h:d:"
+    longArgs = [ "port=", "host=", "document-root="]
+    showUsage = False
+    overridePort = None
+    overrideHost = None
+    overrideDocRoot = None
+    try:
+        optlist, args = getopt.getopt(sys.argv[1:], shortArgs, longArgs)
+        for opt in optlist:
+            if opt[0] == "--port" or opt[0] == "-p":
+                #override the port
+                overridePort = opt[1]
+            elif opt[0] == "--host" or opt[0] == "-h":
+                #override host
+                overrideHost = opt[1]
+            elif opt[0] == "--document-root" or opt[0] == "-d":
+                #override document root
+                overrideDocRoot = opt[1]
+    except getopt.GetoptError:
+        #we get to print our usage message!
+        showUsage = True
+    if showUsage:
+        print "Python WebSocket Server"
+        print "Usage:"
+        print "\t-p --port=\t\tOverride configured port number"
+        print "\t-h --host=\t\tOverride configured host"
+        print "\t-d --document-root=\tOverride configured document root"
+        print "No arguments will start the server as configured in server.config"
+        return
+    
+    server = WebSocketServer(overridePort, overrideHost, overrideDocRoot)
     server.runServer()
 
 if __name__ == "__main__":
