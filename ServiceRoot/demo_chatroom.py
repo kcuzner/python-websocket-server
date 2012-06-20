@@ -89,6 +89,9 @@ class Chatter:
         if event.eventId == Chatroom.ChatroomEvent.EV_LISTING:
             #they are listing all their rooms to us
             data = { 'type' : 'event', 'event' : { 'type' : 'listing', 'chatrooms' : event.data } }
+        elif event.eventId == Chatroom.ChatroomEvent.EV_UPDATEROOM:
+            #update the room
+            data = { 'type' : 'event', 'event' : { 'type' : 'update', 'data' : event.data } }
         elif self.state == Chatter.STATE_CHATTING or self.state == Chatter.STATE_SELECTING:
             #we ignore some events unless we are chatting
             if event.eventId == Chatroom.ChatroomEvent.EV_MESSAGE:
@@ -107,15 +110,28 @@ class ChatroomCollection(Services.Subscribable):
     def __init__(self):
         Services.Subscribable.__init__(self)
         self.chatrooms = {}
+        self.name = "" #prevent breaking the chatroom just in case by making this look like a chatter
+        
+    def __getChatroomUpdateCallback(self, name):
+        """Returns a chatroom specific callback which is used for notifying all
+        clients of updates in the size of the chatroom"""
+        def chatroomCallback(event):
+            if event.eventId == Chatroom.ChatroomEvent.EV_NEWSUBSCRIBER or event.eventId == Chatroom.ChatroomEvent.EV_UNSUBSCRIBE:
+                updateEvent = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_UPDATEROOM, (name, event.data[1]))
+                self.sendEvent(updateEvent)
+        chatroomCallback.__doc__ = "Room-specific callback listening for room size updates."
+        #chatroomCallback.__name__ = "cCallback_%s" % name
+        return chatroomCallback
+            
     
     def subscribe(self, chatter):
         """Subscribes a chatter to the events in this chatroom collection (such as adding chatrooms)"""
         ret = Services.Subscribable.subscribe(self, chatter, chatter.onChatroomEvent)
         #tell the chatter about all my rooms
-        names = []
+        crData = []
         for room in self.chatrooms:
-            names.append(room)
-        chatter.onChatroomEvent(Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_LISTING, names))
+            crData.append((room, self.chatrooms[room].getNumSubscribers()))
+        chatter.onChatroomEvent(Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_LISTING, crData))
         return ret
     
     def createChatroom(self, name):
@@ -124,6 +140,7 @@ class ChatroomCollection(Services.Subscribable):
             print "oh noes"
             return False #chatroom already exists
         self.chatrooms[name] = Chatroom(name)
+        self.chatrooms[name].subscribeSilent(self, self.__getChatroomUpdateCallback(name))
         event = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_CREATE, name)
         self.sendEvent(event)
         return True
@@ -136,6 +153,7 @@ class Chatroom(Services.Subscribable):
         EV_UNSUBSCRIBE = 2
         EV_CREATE = 3
         EV_LISTING = 4
+        EV_UPDATEROOM = 5
         def __init__(self, eventId, data):
             """Creates a new chatroom event.
             type: A value matching one of the EV_ variables in this class
@@ -152,13 +170,13 @@ class Chatroom(Services.Subscribable):
     def subscribe(self, chatter):
         """Subscribes a chatter to this chatroom's events. The subscriber should implement a
         method called onChatroomEvent(event) where the argument is a Chatroom.ChatroomEvent"""
-        event = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_NEWSUBSCRIBER, chatter.name)
+        event = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_NEWSUBSCRIBER, (chatter.name, self.getNumSubscribers() + 1))
         self.sendEvent(event)
         return Services.Subscribable.subscribe(self, chatter, chatter.onChatroomEvent)
     
     def unsubscribe(self, sId):
         name = Services.Subscribable.unsubscribe(self, sId).name
-        event = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_UNSUBSCRIBE, name)
+        event = Chatroom.ChatroomEvent(Chatroom.ChatroomEvent.EV_UNSUBSCRIBE, (name, self.getNumSubscribers()))
         self.sendEvent(event)
     
     def message(self, chatter, message):
