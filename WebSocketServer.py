@@ -33,6 +33,9 @@ class WebSocketServer:
         self.manager = multiprocessing.Manager()
         self.webSocketManager = WebSockets.WebSocketClient.WebSocketManager([], self.shutdownEvent, self.directory)
         self.webSocketManager.start()
+        self.overridePort = overridePort
+        self.overrideHost = overrideHost
+        self.overrideDocRoot = overrideDocRoot
         #logging.basicConfig(filename="server.log", level=logging.DEBUG)
         
     def runServer(self):
@@ -43,8 +46,8 @@ class WebSocketServer:
             print "ERROR: server.config not found"
             return
         
-        HOST = self.config.get('server', 'host')
-        PORT = self.config.getint('server', 'port')
+        HOST = self.overrideHost if self.overrideHost is not None else self.config.get('server', 'host')
+        PORT = self.overridePort if self.overridePort is not None else self.config.getint('server', 'port')
         ADDR = (HOST, PORT)
         
         print "Attempting to start server on", ADDR
@@ -96,7 +99,7 @@ class WebSocketServer:
                 if process is None:
                     #attempt to load the service
                     incpath = "" #'.'.join(location)
-                    path = self.config.get('server', 'document-root') + '/'.join(location)
+                    path = (self.overrideDocRoot if self.overrideDocRoot is not None else self.config.get('server', 'document-root')) + '/'.join(location)
                     try:
                         service = imp.load_source(incpath, path)
                         sendQueue = self.manager.Queue()
@@ -199,7 +202,11 @@ def main():
         for opt in optlist:
             if opt[0] == "--port" or opt[0] == "-p":
                 #override the port
-                overridePort = opt[1]
+                try:
+                    overridePort = int(opt[1])
+                except ValueError:
+                    print "Invalid port number:", opt[1]
+                    showUsage = True
             elif opt[0] == "--host" or opt[0] == "-h":
                 #override host
                 overrideHost = opt[1]
