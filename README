@@ -1,6 +1,8 @@
 WebSocketServer
 Written for Python 2.7
 
+Released under the LGPL
+
 Kevin Cuzner
 
 This is a server meant to run dedicated on a specific port on the host machine.
@@ -71,3 +73,4 @@ inspired at least partially by the subscription system used in knockoutjs to
 create "update" events for normal objects. Services.Subscribable can be
 inherited by any class wishing to use the subscription system. Documentation on
 the exact usage of this can be found the Subscribable class itself.
+
