@@ -17,6 +17,7 @@ class Chatter:
         self.socketId = socketId
         self.sendQueue = sendQueue;
         self.chatrooms = chatrooms
+        self.chatroomsSubscription = None #this needs to be set after creation
         self.chatroom = None
         self.subscriptionId = None
         self.state = Chatter.STATE_INITIALIZE
@@ -32,7 +33,12 @@ class Chatter:
             return #we can't process this one
         #find out what they sent us
         if received.transactionType == WebSocketTransaction.TRANSACTION_CLOSE:
-            print "Woe is me for I am undone"
+            #unsubscribe from our current chatroom
+            if self.chatroom != None:
+                self.chatroom.unsubscribe(self.subscriptionId)
+            #unsubscribe from the service (this should trigger events removing this client from the service)
+            if self.chatroomsSubscription != None:
+                self.chatrooms.unsubscribe(self.chatroomsSubscription, self.socketId)
             return
         #if we made it this far, it was normal data being received
         data = json.loads(received.data)
@@ -78,10 +84,6 @@ class Chatter:
                     #sending a message
                     with self.chatroom.lock:
                         self.chatroom.message(self, data["message"])
-    
-    def onClose(self):
-        """Called when the underlying socket is closed"""
-        print "I was closed..."
 
     def onChatroomEvent(self, event):
         """Called by the chatroom object to tell us something"""
@@ -107,10 +109,11 @@ class Chatter:
 
 class ChatroomCollection(Services.Subscribable):
     """A list of chatrooms that supports "subscriptions" """
-    def __init__(self):
+    def __init__(self, service):
         Services.Subscribable.__init__(self)
         self.chatrooms = {}
         self.name = "" #prevent breaking the chatroom just in case by making this look like a chatter
+        self.service = service #this is the parent service
         
     def __getChatroomUpdateCallback(self, name):
         """Returns a chatroom specific callback which is used for notifying all
@@ -122,7 +125,11 @@ class ChatroomCollection(Services.Subscribable):
         chatroomCallback.__doc__ = "Room-specific callback listening for room size updates."
         #chatroomCallback.__name__ = "cCallback_%s" % name
         return chatroomCallback
-            
+    
+    def unsubscribe(self, subscriptionId, socketId):
+        """Unsubscribes a chatter  from the service"""
+        Services.Subscribable.unsubscribe(self, subscriptionId)
+        self.service.forgetClient(socketId)
     
     def subscribe(self, chatter):
         """Subscribes a chatter to the events in this chatroom collection (such as adding chatrooms)"""
@@ -188,8 +195,13 @@ class Chatroom(Services.Subscribable):
 class Service(Services.Service):
     def __init__(self, sendQueue, recvQueue):
         Services.Service.__init__(self, sendQueue, recvQueue)
-        self.chatrooms = ChatroomCollection()
+        self.chatrooms = ChatroomCollection(self)
         self.clients = {}
+    
+    def forgetClient(self, socketId):
+        """Called by the chatrooms object to remove a client from the list"""
+        print "Socket", socketId, "removed."
+        self.clients.pop(socketId)
     
     def run(self):
         """Main thread method"""
@@ -203,8 +215,8 @@ class Service(Services.Service):
                         #we have a new client!
                         print "Got client from", transaction.data
                         chatter = Chatter(transaction.data, transaction.socketId, self.sendQueue, self.chatrooms)
-                        self.chatrooms.subscribe(chatter)
-                        self.clients[chatter.socketId] = chatter                        
+                        chatter.chatroomsSubscription = self.chatrooms.subscribe(chatter)
+                        self.clients[chatter.socketId] = chatter  
                     else:
                         #find the chatter to send this to
                         self.clients[transaction.socketId].injectReceived(transaction)
