@@ -99,9 +99,9 @@ class Chatter:
             if event.eventId == Chatroom.ChatroomEvent.EV_MESSAGE:
                 data = { 'type' : 'event', 'event' : { 'type' : 'message', 'name' : event.data[0], 'message' : event.data[1] } }
             elif event.eventId == Chatroom.ChatroomEvent.EV_NEWSUBSCRIBER:
-                data = { 'type' : 'event', 'event' : { 'type' : 'newuser', 'name' : event.data } }
+                data = { 'type' : 'event', 'event' : { 'type' : 'newuser', 'name' : event.data[0] } }
             elif event.eventId == Chatroom.ChatroomEvent.EV_UNSUBSCRIBE:
-                data = { 'type' : 'event', 'event' : { 'type' : 'logoff', 'name' : event.data } }
+                data = { 'type' : 'event', 'event' : { 'type' : 'logoff', 'name' : event.data[0] } }
             elif event.eventId == Chatroom.ChatroomEvent.EV_CREATE:
                 data = { 'type' : 'event', 'event' : { 'type' : 'newchatroom', 'name' : event.data } }
         transaction = WebSocketTransaction(WebSocketTransaction.TRANSACTION_DATA, self.socketId, json.dumps(data))
