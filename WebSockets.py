@@ -189,7 +189,6 @@ class WebSocketClient:
         
         def _sendToSocket(self, data, sock):
             """Sends some bytes to a socket and returns the remaining bytes or none if it was all sent"""
-            print "sending", data, "to", sock
             nSent = sock.send(data)
             if nSent == len(data):
                 return None

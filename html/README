@@ -1,0 +1,8 @@
+This folder contains a demo chatroom service which can be run in any browser
+supporting HTML5 WebSockets (version 13 at the time of writing). The
+WebSocketServer should be running on the port and IP address specified in the
+script at the beginning of demo_chatroom.html.
+
+
+
+ 

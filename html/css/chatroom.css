@@ -1,0 +1,102 @@
+.content-padded {
+	padding: 5px;
+}
+
+.select-box {
+	background: #fff;
+	overflow-y: scroll;
+	height: 300px;
+	margin-bottom: 5px;
+}
+
+.button {
+	cursor: pointer;
+}
+
+.button span {
+	float: left;
+	margin-right: 5px;
+}
+
+.title-left {
+	float: left;
+}
+
+.title-right {
+	float: right;
+}
+
+.chat-box {
+	background: #fff;
+	overflow-y: scroll;
+	height: 300px;
+	margin-bottom: 5px;
+}
+
+.overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	float: left;
+	height: 350px;
+	background: rgb(0, 0, 0) transparent; /* default fallback */
+	background: rgba(0, 0, 0, 0.5); /* nice browsers */
+	filter:progid:DXImageTransform.Microsoft.gradient(startColorstr=#80000000, endColorstr=#80000000); /* IE 6/7 */
+	-ms-filter: "progid:DXImageTransform.Microsoft.gradient(startColorstr=#80000000, endColorstr=#80000000)"; /* IE8 */
+}
+
+.box-settings, .box-error, .box-waiting {
+	width: 300px;
+	margin: 0 auto;
+	margin-top: 50px;
+}
+
+.box-settings .input-line label {
+	width: 50px;
+	text-align: right;
+	display: block;
+	float: left;
+	margin: 6px;
+}
+
+.box-settings .input-line input {
+	float: left;
+}
+
+.box-error span, .box-waiting span {
+	float: left;
+	margin-right: 5px;
+}
+
+.box-error div.content-padded, .box-waiting div.content-padded {
+	padding: 10px;
+}
+
+.chatroom-listing {
+	padding: 3px;
+	cursor: pointer;
+}
+
+.chatroom-listing.ui-state-default, .chatroom-listing.ui-state-hover, .chatroom-listing.ui-state-active {
+	border: 0;
+}
+
+.chatroom-listing.ui-state-default {
+	background: #fff;
+}
+
+.chatroom-listing span.user-count {
+	float: right;
+}
+
+.chat-message .chat-message-name {
+	font-weight: bold;
+	float: left;
+	width: 100px;
+	text-align: right;
+	padding-right: 5px;
+}
+
+.chat-message .chat-message-body {
+	float: left;
+}

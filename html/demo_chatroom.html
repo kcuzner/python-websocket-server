@@ -1,0 +1,115 @@
+<html>
+	<head>
+		<title>HTML5 WebSockets Chatroom</title>
+		
+		<!-- Framework CSS -->  
+		<link rel="stylesheet" href="css/blueprint/screen.css" type="text/css" media="screen, projection" />  
+		<link rel="stylesheet" href="css/blueprint/print.css" type="text/css" media="print" />  
+		<!--[if IE]><link rel="stylesheet" href="blueprint/ie.css" type="text/css" media="screen, projection" /><![endif]-->  
+	  
+		<!-- Import fancy-type plugin. -->  
+		<link rel="stylesheet" href="css/blueprint/plugins/fancy-type/screen.css" type="text/css" media="screen, projection" />
+		<link rel="stylesheet" href="css/cupertino/jquery-ui-1.8.20.custom.css" type="text/css"/>
+		<link rel="stylesheet" href="css/chatroom.css" type="text/css"/>
+		
+		<!-- Set host and port here -->
+		<script type="text/javascript">
+			var host = "127.0.0.1";
+			var port = 12345;
+		</script>
+		
+		<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+		<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.8.18/jquery-ui.min.js"></script>
+		<script type="text/javascript" src="js/knockout-2.1.0.js"></script>
+		<script type="text/javascript" src="js/client.js"></script>
+	</head>
+	<body>
+		<div class="container">
+			<div class="ui-helper-clearfix">
+				<div class="span-24 prepend-top last">
+					<h1 class="alt title-left">WebSockets Chatroom Demo</h1>
+					<h4 class="alt title-right">By Kevin Cuzner</h4>
+					<hr/>
+					<blockquote>
+						This demo shows the usage of sockets to run a chat server. By using sockets instead of polling, the server instantly reacts
+						to the event of receiving a message from one of the users to echo it back to the other users. To keep it simple, this
+						particular implementation of the chat server does not keep track of message which have been sent; only messages that are
+						being sent. The server itself is written in python and functions by attempting to resolve the endpoint requested with a
+						python script in a directory matching the requested URI relative a Services directory. The server handles distributing
+						clients to their various endpoints, but it is up to the individual services to determine exactly what to do with each client.
+						The javascript on the client side is relatively simple. Using <a href="http://www.knockoutjs.com">knockoutjs</a> and
+						<a href="http://www.jquery.com/">jQuery</a> the client scripts establish a connection to the server and simply obey its
+						instructions while telling the server about the user's response.
+					</blockquote>
+					<hr/>
+				</div>
+			</div>
+			<div class="ui-helper-clearfix" style="position: relative;">
+				<div class="span-6">
+					<div class="ui-widget-content ui-corner-all content-padded">
+						<div data-bind="foreach: chatrooms" class="ui-widget-content ui-corner-all select-box">
+							<div data-bind="jqMouseover: $root.currentChatroom() == $data, click: $root.joinChatroom" class="chatroom-listing ui-state-default ui-helper-clearfix">
+								<span data-bind="text: name">Room name</span>
+								<span data-bind="text: userCount" class="user-count alt">150</span>
+							</div>
+						</div>
+						<div data-bind="jqMouseover: false, click: createChatroom" class="ui-state-default ui-corner-all ui-helper-clearfix content-padded button">
+							<span class="ui-icon ui-icon-plusthick"></span><span>Create New Chatroom</span>
+						</div>
+					</div>
+				</div>
+				<div class="span-18 last">
+					<div class="ui-widget-content ui-corner-all content-padded">
+						<div data-bind="foreach: messages" class="ui-widget-content ui-corner-all chat-box">
+							<div class="chat-message ui-helper-clearfix">
+								<!-- ko if: type() == "message" -->
+								<div data-bind="text: name" class="chat-message-name">
+									Name
+								</div>
+								<div class="chat-message-body">
+									<div data-bind="visible: !isStatus(), text: message">Message</div>
+									<div data-bind="visible: isStatus(), text: status" class="alt">Status</div>
+								</div>
+								<!-- /ko -->
+								<!-- ko if: type() == "newuser" -->
+								<i><span data-bind="text: name"></span> joined the room</i>
+								<!-- /ko -->
+								<!-- ko if: type() == "logoff" -->
+								<i><span data-bind="text: name"></span> left the room</i>
+								<!-- /ko -->
+							</div>
+						</div>
+						<div class="ui-helper-clearfix">
+							<input data-bind="value: message, event: { keypress : processMsgKeyDown }" type="text" size="60" style="float: left; margin-right: 5px;"/>
+							<div data-bind="jqMouseover: false, click: sendMessage" class="ui-state-default  ui-corner-all ui-helper-clearfix content-padded button" style="float: left;">
+								<span class="ui-icon ui-icon-comment"></span><span>Send</span>
+							</div>
+							<div data-bind="jqMouseover: false, click: showSettings" class="ui-state-default ui-corner-all ui-helper-clearfix content-padded button" style="float: right;">
+								<span class="ui-icon ui-icon-gear"></span><span>Settings</span>
+							</div>
+						</div>
+					</div>
+				</div>
+				<div data-bind="visible: overlayState() != overlayState_off" class="span-24 last overlay ui-corner-all">
+					<div data-bind="visible: overlayState() == overlayState_settings " class="ui-widget-content ui-corner-all content-padded box-settings">
+						<div class="ui-widget-header ui-corner-tl ui-corner-tr content-padded">Settings</div>
+						<div class="ui-widget-content ui-corner-bl ui-corner-br ui-helper-clearfix content-padded" style="border-top: 0;">
+							<div class="input-line ui-helper-clearfix"><label for="chat-name">Name:</label><input data-bind="value: name, event: { keypress: processNameKeyDown }" type="text" size="20" name="chat-name"/></div>
+							<div data-bind="jqMouseover: false, click: hideSettings" class="ui-state-default ui-corner-all ui-helper-clearfix content-padded button" style="margin: 0 auto; width: 104px;"><span class="ui-icon ui-icon-disk"></span><span>Save settings</span></div>
+						</div>
+					</div>
+					<div data-bind="visible: overlayState() == overlayState_error" class="ui-widget-content ui-corner-all content-padded box-error">
+						<div class="ui-state-error ui-corner-all ui-helper-clearfix content-padded">
+							<span class="ui-icon ui-icon-alert"></span><span><strong>Error:</strong></span><span data-bind="text: errorMessage"></span>
+						</div>
+					</div>
+					<div data-bind="visible: overlayState() == overlayState_waiting" class="ui-widget-content ui-corner-all content-padded box-waiting">
+						<div class="ui-state-highlight ui-corner-all ui-helper-clearfix content-padded">
+							<span><img src="img/wait20trans.gif"/></span><span><strong>Please wait:</strong></span><span data-bind="text: waitMessage"></span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</body>
+</html>
