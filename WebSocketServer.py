@@ -12,6 +12,7 @@ import multiprocessing
 import WebSockets
 import sys
 import getopt
+import logging
 
 HTTP_METHOD = "GET"
 HTTP_VERSION = "HTTP/1.1"
@@ -36,7 +37,7 @@ class WebSocketServer:
         self.overridePort = overridePort
         self.overrideHost = overrideHost
         self.overrideDocRoot = overrideDocRoot
-        #logging.basicConfig(filename="server.log", level=logging.DEBUG)
+        self.logger = None
         
     def runServer(self):
         print "Loading configuration file..."
@@ -46,11 +47,23 @@ class WebSocketServer:
             print "ERROR: server.config not found"
             return
         
+        #get the log and set things up
+        logfilename = self.config.get('logging', 'log')
+        loglevel = logging.INFO
+        if self.config.get('logging', 'debug') == "true" or self.config.get('logging', 'debug') == "True":
+            loglevel = logging.DEBUG
+        format = self.config.get('logging', 'format')
+        logging.basicConfig(filename=logfilename, level=loglevel, format=format)
+        
         HOST = self.overrideHost if self.overrideHost is not None else self.config.get('server', 'host')
         PORT = self.overridePort if self.overridePort is not None else self.config.getint('server', 'port')
         ADDR = (HOST, PORT)
         
-        print "Attempting to start server on", ADDR
+        self.logger = logging.getLogger(__name__)
+        
+        
+        self.logger.log(logging.INFO, "Starting server on %s", ADDR)
+        
         
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -58,18 +71,18 @@ class WebSocketServer:
         server.bind(ADDR)
         server.listen(5)
         
-        print "Server started. Listening for connections..."
+        self.logger.log(logging.INFO, "Server started. Listening for incoming connections.")
         
         while self.shutdownEvent.is_set() == False:
             try:
                 #get a new client
                 conn, addr = server.accept()
-                print "Client connected from", addr
+                self.logger.log(logging.DEBUG, "Client connected from %s", addr)
                 request = conn.recv(4096)
                 response, close, serviceRecord = self.handshake(request)
                 conn.send(response)
                 if close:
-                    print "Invalid request from", addr
+                    self.logger.log(logging.DEBUG, "Invalid request from %s", addr)
                     conn.close()
                     continue
                 client = WebSockets.WebSocketClient(self.webSocketManager, conn, addr)
@@ -80,7 +93,7 @@ class WebSocketServer:
             except KeyboardInterrupt:
                 self.shutdownEvent.set() #shut down gracefully
         
-        print "Shutting down server..."
+        self.logger.log(logging.INFO, "Shutting down server...")
         self.directory.joinAll()
         
         server.shutdown(socket.SHUT_RDWR)
@@ -127,16 +140,17 @@ class WebSocketServer:
         #the first line should contain their request
         heading = lines[0].split()
         if len(heading) != 3:
+            self.logger.log(logging.INFO, "Bad request received.")
             close = True
             response += HTTP_BAD_REQUEST + "\r\n"
         elif heading[0] != HTTP_METHOD:
             #they did something other than a get request
-            print heading[0]
+            self.logger.log(logging.INFO, "Received a bad request (%s)", heading[0])
             close = True
             response += HTTP_METHOD_NOT_ALLOWED + "\r\n"
         elif heading[2] != HTTP_VERSION:
             #they didn't say HTTP/1.1
-            print heading[2]
+            self.logger.log(logging.INFO, "Received a bad http version (%s)", heading[2])
             close = True
             response += HTTP_BAD_REQUEST + "\r\n"
         if close:
@@ -154,6 +168,7 @@ class WebSocketServer:
         service = self.getService(location)
         if service is None:
             #we are done
+            self.logger.log(logging.WARNING, "Request for a service at %s which did not exist", heading[1])
             close = True
             response += HTTP_NOT_FOUND + "\r\n"
             return response, close, service
@@ -167,14 +182,17 @@ class WebSocketServer:
             headers[header[0].strip()] = header[1].strip()
         if "Upgrade" not in headers or "Sec-WebSocket-Version" not in headers or "Sec-WebSocket-Key" not in headers:
             #they need to have certain headers
+            self.logger.log(logging.INFO, "Invalid headers received")
             close = True
             response += HTTP_BAD_REQUEST + "\r\n"
         elif headers["Upgrade"] != "websocket":
             #we need to ugprade to a web socket
+            self.logger.log(logging.INFO, "Upgrade header %s not valid", headers["Upgrade"])
             close = True
             response += HTTP_BAD_REQUEST + "\r\n"
         elif headers["Sec-WebSocket-Version"] != WEBSOCKET_VERSION:
             #this is built for version 13
+            self.logger.log(logging.INFO, "Bad websocket version %s requested", headers["Sec-WebSocket-Version"])
             close = True
             response += HTTP_NOT_IMPLEMENTED + "\r\n"
         if close:
