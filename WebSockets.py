@@ -279,6 +279,10 @@ class WebSocketClient:
                                             logging.warning("Notice: Receive queue full on WebSocketClient" + str(s) + "... did you forget to empty the queue or call task_done?")
                                             pass #oh well...I guess their data gets to be lost since they didn't bother to empty their queue
                                         s._readProgress = WebSocketClient.WebSocketRecvState() #reset the progress
+                        except WebSocketInvalidDataException:
+                            #The socket got some bad data, so it should be closed
+                            with s.lock:
+                                s.open = False
                         except socket.error:
                             pass #don't worry about it
                     if w:
