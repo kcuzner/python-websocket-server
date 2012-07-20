@@ -3,3 +3,6 @@
 
 #logging
 *.log
+
+#normal configuration
+server.config
